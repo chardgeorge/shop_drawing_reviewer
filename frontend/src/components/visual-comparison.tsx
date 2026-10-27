@@ -1,11 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  comparePdfPages,
+  compareAlignedPdfPages,
   getPdfPageCount,
+  preparePdfAlignment,
 } from "@/lib/pdf-compare";
-import type { PdfComparison } from "@/lib/pdf-compare";
+import type {
+  ManualAlignment,
+  PdfAlignment,
+  PdfComparison,
+} from "@/lib/pdf-compare";
 
 type CompareDrawing = {
   id: string;
@@ -113,6 +118,19 @@ export default function VisualComparison({
   const [isComparing, setIsComparing] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
   const [notice, setNotice] = useState("");
+  const [alignment, setAlignment] = useState<PdfAlignment | null>(null);
+  const [manualAlignment, setManualAlignment] = useState<ManualAlignment>({
+    offsetX: 0,
+    offsetY: 0,
+    scale: 1,
+    rotationDegrees: 0,
+  });
+  const dragStart = useRef<{
+    clientX: number;
+    clientY: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>(null);
   const [comparison, setComparison] = useState<ComparisonDisplay | null>(null);
 
   const engineerFile = engineeringFiles.find((item) => item.id === engineerId)?.file;
@@ -134,6 +152,8 @@ export default function VisualComparison({
     let active = true;
     setEngineerPageCount(0);
     setEngineerPage(1);
+    setAlignment(null);
+    setComparison(null);
     if (!engineerFile) return;
     getPdfPageCount(engineerFile)
       .then((count) => {
@@ -151,6 +171,8 @@ export default function VisualComparison({
     let active = true;
     setShopPageCount(0);
     setShopPage(1);
+    setAlignment(null);
+    setComparison(null);
     if (!shopFile) return;
     getPdfPageCount(shopFile)
       .then((count) => {
@@ -174,14 +196,15 @@ export default function VisualComparison({
 
   if (engineeringFiles.length === 0 || shopFiles.length === 0) return null;
 
-  async function runComparison() {
+  async function runAlignment() {
     if (!engineerFile || !shopFile || !engineerScale || !shopScale) return;
     onCompareStart?.();
     setIsComparing(true);
     setNotice("");
     setComparison(null);
+    setAlignment(null);
     try {
-      const result = await comparePdfPages(
+      const result = await preparePdfAlignment(
         engineerFile,
         shopFile,
         engineerPage,
@@ -189,6 +212,29 @@ export default function VisualComparison({
         Number(engineerScale),
         Number(shopScale),
       );
+      setManualAlignment({
+        offsetX: 0,
+        offsetY: 0,
+        scale: 1,
+        rotationDegrees: 0,
+      });
+      setAlignment(result);
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "The PDF alignment failed unexpectedly.",
+      );
+    } finally {
+      setIsComparing(false);
+    }
+  }
+
+  async function runComparison() {
+    if (!alignment) return;
+    setIsComparing(true);
+    setNotice("");
+    setComparison(null);
+    try {
+      const result = await compareAlignedPdfPages(alignment, manualAlignment);
       const engineerPdfBuffer = new ArrayBuffer(result.engineerMarkedPdf.byteLength);
       new Uint8Array(engineerPdfBuffer).set(result.engineerMarkedPdf);
       const shopPdfBuffer = new ArrayBuffer(result.markedPdf.byteLength);
@@ -242,10 +288,12 @@ export default function VisualComparison({
           Engineer-issued PDF
           <select
             value={engineerId}
+            disabled={isComparing}
             onChange={(event) => {
               setEngineerId(event.target.value);
               setEngineerScale("100");
               setComparison(null);
+              setAlignment(null);
               setNotice("");
             }}
           >
@@ -262,8 +310,9 @@ export default function VisualComparison({
               setEngineerPage(Number(event.target.value));
               setEngineerScale("100");
               setComparison(null);
+              setAlignment(null);
             }}
-            disabled={!engineerPageCount}
+            disabled={!engineerPageCount || isComparing}
           >
             {Array.from({ length: engineerPageCount }, (_, index) => index + 1).map((page) => (
               <option key={page} value={page}>{page}</option>
@@ -274,9 +323,11 @@ export default function VisualComparison({
           Engineer page scale *
           <select
             value={engineerScale}
+            disabled={isComparing}
             onChange={(event) => {
               setEngineerScale(event.target.value);
               setComparison(null);
+              setAlignment(null);
             }}
             required
           >
@@ -297,10 +348,12 @@ export default function VisualComparison({
           Shop PDF
           <select
             value={shopId}
+            disabled={isComparing}
             onChange={(event) => {
               setShopId(event.target.value);
               setShopScale("100");
               setComparison(null);
+              setAlignment(null);
               setNotice("");
             }}
           >
@@ -317,8 +370,9 @@ export default function VisualComparison({
               setShopPage(Number(event.target.value));
               setShopScale("100");
               setComparison(null);
+              setAlignment(null);
             }}
-            disabled={!shopPageCount}
+            disabled={!shopPageCount || isComparing}
           >
             {Array.from({ length: shopPageCount }, (_, index) => index + 1).map((page) => (
               <option key={page} value={page}>{page}</option>
@@ -329,9 +383,11 @@ export default function VisualComparison({
           Shop page scale *
           <select
             value={shopScale}
+            disabled={isComparing}
             onChange={(event) => {
               setShopScale(event.target.value);
               setComparison(null);
+              setAlignment(null);
             }}
             required
           >
@@ -352,13 +408,177 @@ export default function VisualComparison({
           className="continue-button"
           type="button"
           disabled={!canCompare}
-          onClick={runComparison}
+          onClick={runAlignment}
         >
-          {isComparing ? "Comparing pages..." : "Compare selected pages"}
+          {isComparing
+            ? "Aligning pages..."
+            : alignment
+              ? "Re-align selected pages"
+              : "Align selected pages"}
         </button>
       </div>
 
       {notice && <p className="notice-message" role="alert">{notice}</p>}
+
+      {alignment && !comparison && (
+        <div className="alignment-editor">
+          <div className="comparison-result-heading">
+            <div>
+              <h3>Adjust page alignment</h3>
+              <p>
+                Drag the aligned shop page to fine-tune its position, then adjust
+                scale and rotation before searching for discrepancies.
+              </p>
+              <p className="registration-summary">
+                Automatic alignment: {alignment.registration.inliers} reciprocal
+                feature matches (
+                {Math.round(alignment.registration.inlierPercent * 100)}%
+                inliers), scale {alignment.registration.scale.toFixed(3)}×,
+                expected {alignment.registration.expectedScale.toFixed(3)}×,
+                rotation {alignment.registration.rotationDegrees.toFixed(1)}°.
+              </p>
+            </div>
+          </div>
+          <div className="alignment-adjustments">
+            <label>
+              Scale adjustment: {manualAlignment.scale.toFixed(3)}×
+              <input
+                type="range"
+                min="0.8"
+                max="1.2"
+                step="0.005"
+                value={manualAlignment.scale}
+                onChange={(event) =>
+                  setManualAlignment((current) => ({
+                    ...current,
+                    scale: Number(event.target.value),
+                  }))
+                }
+              />
+            </label>
+            <label>
+              Rotation: {manualAlignment.rotationDegrees.toFixed(1)}°
+              <input
+                type="range"
+                min="-5"
+                max="5"
+                step="0.1"
+                value={manualAlignment.rotationDegrees}
+                onChange={(event) =>
+                  setManualAlignment((current) => ({
+                    ...current,
+                    rotationDegrees: Number(event.target.value),
+                  }))
+                }
+              />
+            </label>
+            <label className="comparison-grid-toggle">
+              <input
+                type="checkbox"
+                checked={showGrid}
+                onChange={(event) => setShowGrid(event.target.checked)}
+              />
+              Show 10 × 10 alignment grid
+            </label>
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() =>
+                setManualAlignment({
+                  offsetX: 0,
+                  offsetY: 0,
+                  scale: 1,
+                  rotationDegrees: 0,
+                })
+              }
+            >
+              Reset adjustments
+            </button>
+          </div>
+          <div className="comparison-previews alignment-previews">
+            <figure className="comparison-preview">
+              <figcaption>Engineer-issued · page {alignment.engineerPageNumber}</figcaption>
+              <div className="comparison-image-wrap">
+                <img src={alignment.engineerPreview} alt="Engineer-issued drawing page" />
+                {showGrid && (
+                  <ComparisonOverlay
+                    comparison={{
+                      regions: [],
+                      width: alignment.width,
+                      height: alignment.height,
+                    }}
+                    showGrid
+                  />
+                )}
+              </div>
+            </figure>
+            <figure className="comparison-preview">
+              <figcaption>Aligned shop page · drag to reposition</figcaption>
+              <div
+                className="comparison-image-wrap alignment-image-wrap"
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  dragStart.current = {
+                    clientX: event.clientX,
+                    clientY: event.clientY,
+                    offsetX: manualAlignment.offsetX,
+                    offsetY: manualAlignment.offsetY,
+                  };
+                }}
+                onPointerMove={(event) => {
+                  const start = dragStart.current;
+                  if (!start) return;
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  if (bounds.width === 0 || bounds.height === 0) return;
+                  setManualAlignment((current) => ({
+                    ...current,
+                    offsetX:
+                      start.offsetX +
+                      ((event.clientX - start.clientX) * alignment.width) / bounds.width,
+                    offsetY:
+                      start.offsetY +
+                      ((event.clientY - start.clientY) * alignment.height) / bounds.height,
+                  }));
+                }}
+                onPointerUp={() => {
+                  dragStart.current = null;
+                }}
+                onPointerCancel={() => {
+                  dragStart.current = null;
+                }}
+              >
+                <img
+                  src={alignment.shopPreview}
+                  alt="Automatically aligned shop drawing page; drag to adjust"
+                  draggable={false}
+                  style={{
+                    transform: `translate(${(manualAlignment.offsetX / alignment.width) * 100}%, ${(manualAlignment.offsetY / alignment.height) * 100}%) scale(${manualAlignment.scale}) rotate(${manualAlignment.rotationDegrees}deg)`,
+                  }}
+                />
+                {showGrid && (
+                  <ComparisonOverlay
+                    comparison={{
+                      regions: [],
+                      width: alignment.width,
+                      height: alignment.height,
+                    }}
+                    showGrid
+                  />
+                )}
+              </div>
+            </figure>
+          </div>
+          <button
+            className="continue-button"
+            type="button"
+            disabled={isComparing}
+            onClick={runComparison}
+          >
+            {isComparing ? "Finding discrepancies..." : "Find discrepancies"}
+          </button>
+        </div>
+      )}
 
       {comparison && (
         <div className="comparison-result">

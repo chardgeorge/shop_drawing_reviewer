@@ -36,6 +36,29 @@ export type PdfComparison = {
   markedPdf: Uint8Array;
 };
 
+export type ManualAlignment = {
+  offsetX: number;
+  offsetY: number;
+  scale: number;
+  rotationDegrees: number;
+};
+
+export type PdfAlignment = {
+  engineerCanvas: HTMLCanvasElement;
+  autoAlignedShopCanvas: HTMLCanvasElement;
+  engineerPreview: string;
+  shopPreview: string;
+  width: number;
+  height: number;
+  registration: RegistrationSummary;
+  engineerPageCount: number;
+  shopPageCount: number;
+  engineerPageNumber: number;
+  shopPageNumber: number;
+  engineerPageWidth: number;
+  engineerPageHeight: number;
+};
+
 type RenderedPage = {
   canvas: HTMLCanvasElement;
   pageWidth: number;
@@ -883,14 +906,14 @@ async function createMarkedPdf(
   return pdf.save();
 }
 
-export async function comparePdfPages(
+export async function preparePdfAlignment(
   engineerFile: File,
   shopFile: File,
   engineerPageNumber: number,
   shopPageNumber: number,
   engineerScaleDenominator: number,
   shopScaleDenominator: number,
-): Promise<PdfComparison> {
+): Promise<PdfAlignment> {
   if (
     !Number.isFinite(engineerScaleDenominator) ||
     engineerScaleDenominator <= 0 ||
@@ -912,7 +935,67 @@ export async function comparePdfPages(
     expectedScale,
   );
 
-  const engineerContext = engineer.canvas.getContext("2d", {
+  return {
+    engineerCanvas: engineer.canvas,
+    autoAlignedShopCanvas: alignedShopCanvas,
+    engineerPreview: engineer.canvas.toDataURL("image/png"),
+    shopPreview: alignedShopCanvas.toDataURL("image/png"),
+    width: engineer.canvas.width,
+    height: engineer.canvas.height,
+    registration,
+    engineerPageCount: engineer.pageCount,
+    shopPageCount: shop.pageCount,
+    engineerPageNumber,
+    shopPageNumber,
+    engineerPageWidth: engineer.pageWidth,
+    engineerPageHeight: engineer.pageHeight,
+  };
+}
+
+function applyManualAlignment(
+  source: HTMLCanvasElement,
+  alignment: ManualAlignment,
+): HTMLCanvasElement {
+  if (
+    !Number.isFinite(alignment.offsetX) ||
+    !Number.isFinite(alignment.offsetY) ||
+    !Number.isFinite(alignment.scale) ||
+    alignment.scale <= 0 ||
+    !Number.isFinite(alignment.rotationDegrees)
+  ) {
+    throw new Error("Enter valid manual alignment adjustments.");
+  }
+
+  const canvas = window.document.createElement("canvas");
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    throw new Error("This browser could not create a canvas for manual alignment.");
+  }
+
+  context.fillStyle = "#fff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.translate(
+    canvas.width / 2 + alignment.offsetX,
+    canvas.height / 2 + alignment.offsetY,
+  );
+  context.rotate((alignment.rotationDegrees * Math.PI) / 180);
+  context.scale(alignment.scale, alignment.scale);
+  context.translate(-canvas.width / 2, -canvas.height / 2);
+  context.drawImage(source, 0, 0);
+  return canvas;
+}
+
+export async function compareAlignedPdfPages(
+  alignment: PdfAlignment,
+  manualAlignment: ManualAlignment,
+): Promise<PdfComparison> {
+  const alignedShopCanvas = applyManualAlignment(
+    alignment.autoAlignedShopCanvas,
+    manualAlignment,
+  );
+  const engineerContext = alignment.engineerCanvas.getContext("2d", {
     willReadFrequently: true,
   });
   const alignedShopContext = alignedShopCanvas.getContext("2d", {
@@ -923,7 +1006,12 @@ export async function comparePdfPages(
   }
 
   const regions = findDifferenceRegions(
-    engineerContext.getImageData(0, 0, engineer.canvas.width, engineer.canvas.height),
+    engineerContext.getImageData(
+      0,
+      0,
+      alignment.engineerCanvas.width,
+      alignment.engineerCanvas.height,
+    ),
     alignedShopContext.getImageData(
       0,
       0,
@@ -933,37 +1021,61 @@ export async function comparePdfPages(
   );
   const [engineerMarkedPdf, markedPdf] = await Promise.all([
     createMarkedPdf(
-      engineer.canvas,
+      alignment.engineerCanvas,
       regions,
-      engineer.canvas.width,
-      engineer.canvas.height,
-      engineer.pageWidth,
-      engineer.pageHeight,
+      alignment.engineerCanvas.width,
+      alignment.engineerCanvas.height,
+      alignment.engineerPageWidth,
+      alignment.engineerPageHeight,
     ),
     createMarkedPdf(
       alignedShopCanvas,
       regions,
       alignedShopCanvas.width,
       alignedShopCanvas.height,
-      engineer.pageWidth,
-      engineer.pageHeight,
+      alignment.engineerPageWidth,
+      alignment.engineerPageHeight,
     ),
   ]);
 
   return {
-    engineerPreview: engineer.canvas.toDataURL("image/png"),
+    engineerPreview: alignment.engineerCanvas.toDataURL("image/png"),
     shopPreview: alignedShopCanvas.toDataURL("image/png"),
     width: alignedShopCanvas.width,
     height: alignedShopCanvas.height,
-    registration,
-    engineerPageCount: engineer.pageCount,
-    shopPageCount: shop.pageCount,
-    engineerPageNumber,
-    shopPageNumber,
+    registration: alignment.registration,
+    engineerPageCount: alignment.engineerPageCount,
+    shopPageCount: alignment.shopPageCount,
+    engineerPageNumber: alignment.engineerPageNumber,
+    shopPageNumber: alignment.shopPageNumber,
     regions,
     engineerMarkedPdf,
     markedPdf,
   };
+}
+
+export async function comparePdfPages(
+  engineerFile: File,
+  shopFile: File,
+  engineerPageNumber: number,
+  shopPageNumber: number,
+  engineerScaleDenominator: number,
+  shopScaleDenominator: number,
+): Promise<PdfComparison> {
+  const alignment = await preparePdfAlignment(
+    engineerFile,
+    shopFile,
+    engineerPageNumber,
+    shopPageNumber,
+    engineerScaleDenominator,
+    shopScaleDenominator,
+  );
+  return compareAlignedPdfPages(alignment, {
+    offsetX: 0,
+    offsetY: 0,
+    scale: 1,
+    rotationDegrees: 0,
+  });
 }
 
 export function comparePdfFirstPages(

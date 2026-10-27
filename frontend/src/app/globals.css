@@ -1300,6 +1300,75 @@ h1 {
   white-space: nowrap;
 }
 
+.alignment-editor {
+  margin-top: 30px;
+  padding: 21px;
+  border: 1px solid #e1e7e5;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 3px 14px rgba(27, 46, 61, 0.035);
+}
+
+.alignment-adjustments {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 12px 18px;
+  margin-top: 16px;
+}
+
+.alignment-adjustments > label:not(.comparison-grid-toggle) {
+  display: grid;
+  gap: 8px;
+  color: #536677;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.alignment-adjustments input[type="range"] {
+  width: 100%;
+  accent-color: #14529a;
+}
+
+.alignment-adjustments .comparison-grid-toggle {
+  margin-top: 0;
+}
+
+.alignment-adjustments .secondary-button {
+  justify-self: start;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #dce3e4;
+  border-radius: 5px;
+  color: #283b4e;
+  background: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.alignment-image-wrap {
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.alignment-image-wrap:active {
+  cursor: grabbing;
+}
+
+.alignment-image-wrap img {
+  transform-origin: center center;
+  pointer-events: none;
+}
+
+.alignment-editor > .continue-button {
+  width: 100%;
+  min-height: 38px;
+  margin-top: 18px;
+  padding: 0 13px;
+}
+
 .comparison-result {
   margin-top: 30px;
   padding: 21px;
@@ -1452,6 +1521,10 @@ h1 {
 
   .comparison-downloads {
     width: 100%;
+  }
+
+  .alignment-adjustments {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .comparison-previews {

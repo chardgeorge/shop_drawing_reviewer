@@ -32,6 +32,7 @@ export type PdfComparison = {
   engineerPageNumber: number;
   shopPageNumber: number;
   regions: DifferenceRegion[];
+  engineerMarkedPdf: Uint8Array;
   markedPdf: Uint8Array;
 };
 
@@ -53,6 +54,7 @@ const MIN_REGISTRATION_INLIER_PERCENT = 0.35;
 const MIN_MATCH_COVERAGE = 0.005;
 const MIN_MATCH_GRID_CELLS = 4;
 const MAX_SCALE_RATIO_DEVIATION = 1.35;
+const LINE_WEIGHT_TOLERANCE_RADIUS = 1;
 
 async function loadPdf(file: File) {
   if (file.size > MAX_FILE_SIZE) {
@@ -584,38 +586,67 @@ function findDifferenceRegions(
   const columns = Math.ceil(engineer.width / TILE_SIZE);
   const rows = Math.ceil(engineer.height / TILE_SIZE);
   const tileCounts = new Uint32Array(columns * rows);
-  const engineerPixels = engineer.data;
-  const shopPixels = shop.data;
+  const pixelCount = engineer.width * engineer.height;
+  const engineerLevels = new Uint8Array(pixelCount);
+  const shopLevels = new Uint8Array(pixelCount);
+
+  for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+    const channel = pixel * 4;
+    engineerLevels[pixel] = Math.round(
+      0.299 * engineer.data[channel] +
+        0.587 * engineer.data[channel + 1] +
+        0.114 * engineer.data[channel + 2],
+    );
+    shopLevels[pixel] = Math.round(
+      0.299 * shop.data[channel] +
+        0.587 * shop.data[channel + 1] +
+        0.114 * shop.data[channel + 2],
+    );
+  }
 
   for (let y = 0; y < engineer.height; y += 1) {
     for (let x = 0; x < engineer.width; x += 1) {
-      const pixel = (y * engineer.width + x) * 4;
-      const engineerLevel =
-        0.299 * engineerPixels[pixel] +
-        0.587 * engineerPixels[pixel + 1] +
-        0.114 * engineerPixels[pixel + 2];
-      let minimumShopLevel = 255;
-      let maximumShopLevel = 0;
+      const index = y * engineer.width + x;
+      const engineerLevel = engineerLevels[index];
+      const shopLevel = shopLevels[index];
+      let minimumShopLevel = shopLevel;
+      let maximumShopLevel = shopLevel;
+      let minimumEngineerLevel = engineerLevel;
+      let maximumEngineerLevel = engineerLevel;
 
-      for (let yOffset = -1; yOffset <= 1; yOffset += 1) {
+      for (
+        let yOffset = -LINE_WEIGHT_TOLERANCE_RADIUS;
+        yOffset <= LINE_WEIGHT_TOLERANCE_RADIUS;
+        yOffset += 1
+      ) {
         const neighborY = y + yOffset;
-        if (neighborY < 0 || neighborY >= shop.height) continue;
-        for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
+        if (neighborY < 0 || neighborY >= engineer.height) continue;
+        for (
+          let xOffset = -LINE_WEIGHT_TOLERANCE_RADIUS;
+          xOffset <= LINE_WEIGHT_TOLERANCE_RADIUS;
+          xOffset += 1
+        ) {
           const neighborX = x + xOffset;
-          if (neighborX < 0 || neighborX >= shop.width) continue;
-          const neighbor = (neighborY * shop.width + neighborX) * 4;
-          const shopLevel =
-            0.299 * shopPixels[neighbor] +
-            0.587 * shopPixels[neighbor + 1] +
-            0.114 * shopPixels[neighbor + 2];
-          minimumShopLevel = Math.min(minimumShopLevel, shopLevel);
-          maximumShopLevel = Math.max(maximumShopLevel, shopLevel);
+          if (neighborX < 0 || neighborX >= engineer.width) continue;
+          const neighbor = neighborY * engineer.width + neighborX;
+          minimumShopLevel = Math.min(minimumShopLevel, shopLevels[neighbor]);
+          maximumShopLevel = Math.max(maximumShopLevel, shopLevels[neighbor]);
+          minimumEngineerLevel = Math.min(
+            minimumEngineerLevel,
+            engineerLevels[neighbor],
+          );
+          maximumEngineerLevel = Math.max(
+            maximumEngineerLevel,
+            engineerLevels[neighbor],
+          );
         }
       }
 
       if (
         engineerLevel < minimumShopLevel - PIXEL_LEVEL_TOLERANCE ||
-        engineerLevel > maximumShopLevel + PIXEL_LEVEL_TOLERANCE
+        engineerLevel > maximumShopLevel + PIXEL_LEVEL_TOLERANCE ||
+        shopLevel < minimumEngineerLevel - PIXEL_LEVEL_TOLERANCE ||
+        shopLevel > maximumEngineerLevel + PIXEL_LEVEL_TOLERANCE
       ) {
         const tile = Math.floor(y / TILE_SIZE) * columns + Math.floor(x / TILE_SIZE);
         tileCounts[tile] += 1;
@@ -812,14 +843,24 @@ export async function comparePdfPages(
       alignedShopCanvas.height,
     ),
   );
-  const markedPdf = await createMarkedPdf(
-    alignedShopCanvas,
-    regions,
-    alignedShopCanvas.width,
-    alignedShopCanvas.height,
-    engineer.pageWidth,
-    engineer.pageHeight,
-  );
+  const [engineerMarkedPdf, markedPdf] = await Promise.all([
+    createMarkedPdf(
+      engineer.canvas,
+      regions,
+      engineer.canvas.width,
+      engineer.canvas.height,
+      engineer.pageWidth,
+      engineer.pageHeight,
+    ),
+    createMarkedPdf(
+      alignedShopCanvas,
+      regions,
+      alignedShopCanvas.width,
+      alignedShopCanvas.height,
+      engineer.pageWidth,
+      engineer.pageHeight,
+    ),
+  ]);
 
   return {
     engineerPreview: engineer.canvas.toDataURL("image/png"),
@@ -832,6 +873,7 @@ export async function comparePdfPages(
     engineerPageNumber,
     shopPageNumber,
     regions,
+    engineerMarkedPdf,
     markedPdf,
   };
 }

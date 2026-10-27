@@ -29,7 +29,7 @@ Assumes a small cross-functional team: product/engineering lead, one frontend-ca
 
 | Week | Focus | Deliverable / exit gate |
 |---|---|---|
-| 1 | Product decisions and repository setup | Agree user roles, supported PDF limits, first schedule format, deployment region, retention, auth, and pilot success metrics. Create frontend/backend/test scaffolds, formatting/linting, CI, and local Postgres setup. |
+| 1 | Product decisions and repository setup | Prototype scope agreed. Frontend/backend/test scaffolds, CI, and local Postgres configuration are in place; verify them in a configured local environment. |
 | 2 | Data model and project API | Apply initial migrations; project CRUD; typed API contract; project authorization seam; API integration tests. |
 | 3 | Document registration and storage | Local filesystem adapter and hosted-storage interface; upload lifecycle; immutable revisions; size/type validation; access control tests. |
 | 4 | Ingestion pipeline | Worker/job lifecycle and retries; PDF validation/page metadata; PyMuPDF text extraction; observable failure states and diagnostics. |
@@ -58,12 +58,22 @@ Each feature requires a labeled test corpus, measured false-positive/false-negat
 - Keep pull requests small, reviewable, and documented. Run formatters, static checks, unit tests, and relevant integration tests in CI.
 - Do not silently drop parser warnings or use an AI answer as a substitute for missing source evidence.
 
-## 5. Decisions to resolve before production
+## 5. Agreed local prototype decisions
+
+These decisions scope the local prototype only; they do not establish production requirements.
+
+- **Users and access:** individual engineers running the app locally; no login or credentials.
+- **PDF input:** assume selectable-text PDFs. Scanned PDFs and OCR are out of scope for the initial prototype.
+- **PDF limits:** no fixed size or page-count limits for the prototype. Add limits if local testing shows they are needed.
+- **File storage:** keep working project PDFs on the developer's machine, outside the Git repository. Only synthetic or explicitly approved/licensed fixtures may be committed.
+- **AI and document data:** default to no transmission of document content to external AI services. Revisit only with explicit data-handling approval.
+
+## 6. Decisions to resolve before production
 
 1. Identity provider, user/organization model, and tenant-isolation requirements.
 2. Hosting region, data residency, encryption/key ownership, retention and deletion policy, backup/restore targets.
-3. Whether any document text may be sent to OpenAI, under which service terms and data-retention settings; default is no AI transmission until approved.
-4. Supported PDF size/page limits and first target beam schedule layouts.
+3. Whether any document text may be sent to an AI service, under which service terms and data-retention settings; prototype default is no transmission until approved.
+4. Supported PDF size/page limits and first target beam schedule layouts beyond selectable-text PDFs.
 5. Pilot corpus access/permissions, ground-truth labeling, and acceptance thresholds for extraction and comparison.
 6. Review status semantics, audit retention, and whether accepted/rejected decisions need formal sign-off.
 7. Frontend/backend deployment platform and operational ownership.

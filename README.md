@@ -51,7 +51,7 @@ See [Solution architecture](docs/SOLUTION_ARCHITECTURE.md), [Data model](docs/DA
 - PostgreSQL 16+
 - Docker Desktop (optional, for local PostgreSQL)
 
-The frontend currently provides a runnable local UI preview. Backend services, authentication, and production data-retention policy remain to be implemented and agreed.
+The prototype is intended for individual engineers running it locally, without login. The frontend is a UI scaffold; the backend currently exposes only a health check. PDF upload, extraction, comparison, and project persistence are not implemented yet.
 
 ## Engineering and data handling principles
 
@@ -59,12 +59,12 @@ The frontend currently provides a runnable local UI preview. Backend services, a
 2. Preserve original values and page-level evidence; never silently normalize away discrepancies.
 3. Ambiguous or missing evidence must be reported as such, not guessed.
 4. Review decisions are attributable and do not alter the original documents or generated finding.
-5. Uploaded project drawings are confidential: never put real project files in source control or external AI prompts without an approved data-handling decision.
+5. Uploaded project drawings are confidential: keep working PDFs on the developer's machine outside this Git repository. Only synthetic or explicitly approved/licensed test fixtures may be committed. Do not send document content to external AI services unless explicitly approved.
 6. Engineers remain responsible for review and disposition.
 
 ## Development status
 
-Architecture and implementation plan are documented. The initial frontend welcome screen is scaffolded; backend services, authentication, deployment configuration, and production data-retention policy remain to be implemented and agreed.
+The local frontend and initial backend/API, test, CI, and PostgreSQL scaffolds are in place. Project/document workflows, PDF processing, comparisons, and issue review remain to be implemented. Hosted authentication and production data-retention/deployment decisions are out of scope for this prototype.
 
 ## Run the frontend preview
 
@@ -76,6 +76,28 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Next.js (normally `http://localhost:3000`). The welcome screen supports selecting or dragging multiple PDFs into the engineer-issued and shop-drawing panels. This is a UI scaffold only: files remain in the browser and are not uploaded or processed until the backend is implemented.
+Open the local URL printed by Next.js (normally `http://localhost:3000`). The welcome screen supports selecting or dragging multiple PDFs into the engineer-issued and shop-drawing panels. This is a UI scaffold only: files remain in the browser and are not uploaded or processed.
 
 Run `npm run typecheck` to check the frontend TypeScript types.
+
+## Run the local backend and database
+
+Install Python 3.12 or later and Docker Desktop. From the repository root, start PostgreSQL:
+
+```powershell
+docker compose up -d db
+```
+
+In another terminal, install the backend and its development tools, then start the API:
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+uvicorn app.main:app --reload
+```
+
+The API health check is at `http://localhost:8000/health`; interactive API documentation is at `http://localhost:8000/docs`. The database is bound to localhost and uses prototype-only credentials. The initial schema in `backend/migrations/` is not automatically applied yet. Stop the API with Ctrl+C and stop PostgreSQL with `docker compose down` from the repository root.
+
+Run backend checks from `backend/` with `ruff check app tests` and `pytest`.

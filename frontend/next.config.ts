@@ -1,8 +1,7 @@
 import type { NextConfig } from "next";
-import path from "node:path";
 
 const nextConfig: NextConfig = {
-  outputFileTracingRoot: path.join(__dirname),
+  outputFileTracingRoot: process.cwd(),
   webpack(config) {
     config.resolve.fallback = {
       ...config.resolve.fallback,
@@ -13,7 +12,7 @@ const nextConfig: NextConfig = {
     return config;
   },
   turbopack: {
-    root: __dirname,
+    root: process.cwd(),
     resolveAlias: {
       fs: "./src/lib/browser-node-shim.ts",
       path: "./src/lib/browser-node-shim.ts",

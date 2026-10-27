@@ -497,9 +497,9 @@ export default function VisualComparison({
           </div>
           <div className="comparison-previews alignment-previews">
             <figure className="comparison-preview">
-              <figcaption>Engineer-issued · page {alignment.engineerPageNumber}</figcaption>
+              <figcaption>Structural Engineer · page {alignment.engineerPageNumber}</figcaption>
               <div className="comparison-image-wrap">
-                <img src={alignment.engineerPreview} alt="Engineer-issued drawing page" />
+                <img src={alignment.engineerPreview} alt="Structural engineer drawing page" />
                 {showGrid && (
                   <ComparisonOverlay
                     comparison={{

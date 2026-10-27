@@ -320,7 +320,7 @@ const SIDE_COPY: Record<
   engineering: {
     title: "Engineering drawings",
     subtitle: "The design intent to review against",
-    shortLabel: "ENGINEER-ISSUED",
+    shortLabel: "STRUCTURAL ENGINEER",
     tone: "blue",
   },
   shop: {
@@ -775,7 +775,7 @@ export default function UploadWorkspace() {
                 <span className="kicker-line" />
                 DRAWING REVIEW
               </div>
-              <h1>Start a new review</h1>
+              <h1>Shop drawing review</h1>
               <p className="intro-copy">
                 Bring both sets of drawings together. We&apos;ll help you spot what
                 needs a closer look.

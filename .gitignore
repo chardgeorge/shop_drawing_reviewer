@@ -23,3 +23,5 @@ __pycache__/
 /backend/data/
 /frontend/.env.local
 *.log
+/frontend/public/ocr/
+/frontend/AGENTS.md

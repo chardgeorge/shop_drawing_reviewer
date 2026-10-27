@@ -49,6 +49,8 @@ export default function VisualComparison({
   const [isComparing, setIsComparing] = useState(false);
   const [notice, setNotice] = useState("");
   const [comparison, setComparison] = useState<ComparisonDisplay | null>(null);
+  const [progress, setProgress] = useState("");
+  const [gridView, setGridView] = useState<"overlay" | "engineer" | "shop">("overlay");
 
   const engineerFile = engineeringFiles.find((item) => item.id === engineerId)?.file;
   const shopFile = shopFiles.find((item) => item.id === shopId)?.file;
@@ -112,6 +114,8 @@ export default function VisualComparison({
     setIsComparing(true);
     setNotice("");
     setComparison(null);
+    setProgress("Rendering pages…");
+    setGridView("overlay");
     try {
       const result = await comparePdfPages(
         engineerFile,
@@ -120,6 +124,7 @@ export default function VisualComparison({
         shopPage,
         Number(engineerScale),
         Number(shopScale),
+        setProgress,
       );
       const pdfBuffer = new ArrayBuffer(result.markedPdf.byteLength);
       new Uint8Array(pdfBuffer).set(result.markedPdf);
@@ -135,6 +140,7 @@ export default function VisualComparison({
       );
     } finally {
       setIsComparing(false);
+      setProgress("");
     }
   }
 
@@ -285,9 +291,83 @@ export default function VisualComparison({
         </button>
       </div>
 
+      {isComparing && progress && (
+        <p className="registration-summary" role="status">{progress}</p>
+      )}
       {notice && <p className="notice-message" role="alert">{notice}</p>}
 
-      {comparison && (
+      {comparison?.registration.method === "grid" && comparison.registration.grid && (
+        <div className="comparison-result">
+          <div className="comparison-result-heading">
+            <div>
+              <h3>
+                Aligned on {comparison.registration.grid.gridLabels.length} grid lines
+              </h3>
+              <p>
+                Red = engineer-issued only · Blue = shop only · Black = on both
+                sheets. Review where colors separate; this is not an engineering
+                conclusion.
+              </p>
+            </div>
+            <a
+              className="marked-pdf-link"
+              href={comparison.markedPdfUrl}
+              download={`${shopFile?.name.replace(/\.pdf$/i, "") ?? "shop-drawing"}-page-${shopPage}-grid-overlay.pdf`}
+            >
+              Download overlay PDF
+            </a>
+          </div>
+          <p className="registration-summary">
+            Matched {comparison.registration.grid.matchedBubbles} grid bubbles
+            across {comparison.registration.grid.lineDirections} line
+            direction{comparison.registration.grid.lineDirections === 1 ? "" : "s"};
+            scale {comparison.registration.scale.toFixed(3)}× (expected{" "}
+            {comparison.registration.expectedScale.toFixed(3)}× from the selected
+            sheet scales), rotation {comparison.registration.rotationDegrees.toFixed(1)}°,
+            median offset {comparison.registration.grid.medianResidualPt.toFixed(1)} pt.
+            Engineer bubbles read from{" "}
+            {comparison.registration.grid.engineerBubbleSource === "text" ? "PDF text" : "OCR"};
+            shop bubbles read from{" "}
+            {comparison.registration.grid.shopBubbleSource === "text" ? "PDF text" : "OCR"}.
+          </p>
+          <p className="comparison-caveat">
+            Grids used: {comparison.registration.grid.gridLabels.join(", ")}
+          </p>
+          <div className="grid-view-toggle" role="group" aria-label="Choose view">
+            {(["overlay", "engineer", "shop"] as const).map((view) => (
+              <button
+                key={view}
+                type="button"
+                className={gridView === view ? "is-selected" : ""}
+                aria-pressed={gridView === view}
+                onClick={() => setGridView(view)}
+              >
+                {view === "overlay" ? "Overlay" : view === "engineer" ? "Engineer-issued" : "Shop (aligned)"}
+              </button>
+            ))}
+          </div>
+          <figure className="comparison-preview grid-overlay-preview">
+            <img
+              src={
+                gridView === "overlay"
+                  ? comparison.overlayPreview
+                  : gridView === "engineer"
+                    ? comparison.engineerPreview
+                    : comparison.shopPreview
+              }
+              alt={
+                gridView === "overlay"
+                  ? "Overlay of engineer-issued and shop drawings aligned on grid lines"
+                  : gridView === "engineer"
+                    ? "Engineer-issued drawing page"
+                    : "Shop drawing page aligned to the engineer-issued page"
+              }
+            />
+          </figure>
+        </div>
+      )}
+
+      {comparison && comparison.registration.method !== "grid" && (
         <div className="comparison-result">
           <div className="comparison-result-heading">
             <div>
@@ -317,6 +397,11 @@ export default function VisualComparison({
             rotation {comparison.registration.rotationDegrees.toFixed(1)}°,
             residual {comparison.registration.reprojectionError.toFixed(2)} px.
           </p>
+          {comparison.registration.gridFallbackReason && (
+            <p className="comparison-caveat">
+              Grid alignment was not used: {comparison.registration.gridFallbackReason}
+            </p>
+          )}
           <p className="comparison-caveat">
             Automatic alignment handles scale, rotation, translation, moderate
             skew, and differing page sizes when the sheets share enough geometry.

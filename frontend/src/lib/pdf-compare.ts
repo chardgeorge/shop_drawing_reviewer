@@ -1,6 +1,9 @@
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import cvModule from "@techstark/opencv-js";
 import type { CV } from "@techstark/opencv-js";
+import type { PDFPageProxy } from "pdfjs-dist";
+import { registerByGrid, renderGridOverlay } from "@/lib/grid-registration";
+import type { GridProgress, GridRegistration } from "@/lib/grid-registration";
 
 export type DifferenceRegion = {
   id: number;
@@ -12,6 +15,11 @@ export type DifferenceRegion = {
 };
 
 export type RegistrationSummary = {
+  /** "grid": aligned on named grid lines; "features": aligned on matching image features. */
+  method: "grid" | "features";
+  grid?: GridRegistration;
+  /** Why grid alignment was not used, when the feature method was used instead. */
+  gridFallbackReason?: string;
   inliers: number;
   matchedFeatures: number;
   inlierPercent: number;
@@ -32,6 +40,8 @@ export type PdfComparison = {
   engineerPageNumber: number;
   shopPageNumber: number;
   regions: DifferenceRegion[];
+  /** Red/blue overlay of both sheets (grid method only). */
+  overlayPreview?: string;
   markedPdf: Uint8Array;
 };
 
@@ -78,6 +88,21 @@ export async function getPdfPageCount(file: File) {
   } finally {
     await loadingTask.destroy();
   }
+}
+
+async function openPdfPage(file: File, pageNumber: number) {
+  const loadingTask = await loadPdf(file);
+  const document = await loadingTask.promise;
+  if (
+    !Number.isInteger(pageNumber) ||
+    pageNumber < 1 ||
+    pageNumber > document.numPages
+  ) {
+    await loadingTask.destroy();
+    throw new Error(`Page ${pageNumber} does not exist in ${file.name}.`);
+  }
+  const page: PDFPageProxy = await document.getPage(pageNumber);
+  return { page, destroy: () => loadingTask.destroy() };
 }
 
 async function renderPage(file: File, pageNumber: number): Promise<RenderedPage> {
@@ -549,6 +574,7 @@ async function alignShopPage(
     return {
       canvas,
       registration: {
+        method: "features",
         inliers,
         matchedFeatures: matchedFeatures.length,
         inlierPercent,
@@ -709,6 +735,7 @@ async function createMarkedPdf(
   renderedHeight: number,
   pageWidth: number,
   pageHeight: number,
+  note?: string,
 ): Promise<Uint8Array> {
   const pdf = await PDFDocument.create();
   const page = pdf.addPage([pageWidth, pageHeight]);
@@ -751,8 +778,8 @@ async function createMarkedPdf(
     });
   });
 
-  if (regions.length === 0) {
-    page.drawText("No candidate changes above the visual-difference threshold.", {
+  if (note || regions.length === 0) {
+    page.drawText(note ?? "No candidate changes above the visual-difference threshold.", {
       x: 18,
       y: pageHeight - 28,
       size: 9,
@@ -764,6 +791,113 @@ async function createMarkedPdf(
   return pdf.save();
 }
 
+async function tryGridAlignment(
+  engineerFile: File,
+  shopFile: File,
+  engineerPageNumber: number,
+  shopPageNumber: number,
+  expectedScale: number,
+  engineer: RenderedPage,
+  shop: RenderedPage,
+  onProgress?: GridProgress,
+): Promise<
+  | {
+      result: {
+        alignedShopCanvas: HTMLCanvasElement;
+        overlayCanvas: HTMLCanvasElement;
+        registration: RegistrationSummary;
+      };
+      reason?: undefined;
+    }
+  | { result?: undefined; reason: string }
+> {
+  const [engineerPdf, shopPdf] = await Promise.all([
+    openPdfPage(engineerFile, engineerPageNumber),
+    openPdfPage(shopFile, shopPageNumber),
+  ]);
+  try {
+    const cv = await loadOpenCv();
+    let grid: GridRegistration;
+    try {
+      grid = await registerByGrid(
+        cv,
+        engineerPdf.page,
+        shopPdf.page,
+        expectedScale,
+        onProgress,
+      );
+    } catch (error) {
+      return {
+        reason:
+          error instanceof Error ? error.message : "Grid alignment failed.",
+      };
+    }
+
+    onProgress?.("Building overlay…");
+    const overlayCanvas = await renderGridOverlay(
+      cv,
+      engineerPdf.page,
+      shopPdf.page,
+      grid,
+    );
+
+    // Warp the shop preview into the engineer preview's pixel space.
+    const engineerZoom = engineer.canvas.width / engineerPdf.page.getViewport({ scale: 1 }).width;
+    const shopZoom = shop.canvas.width / shopPdf.page.getViewport({ scale: 1 }).width;
+    const [a, nb, tx, b, , ty] = grid.matrix;
+    const k = engineerZoom / shopZoom;
+    const shopImage = cv.imread(shop.canvas);
+    const aligned = new cv.Mat();
+    const affine = cv.matFromArray(2, 3, cv.CV_64FC1, [
+      a * k,
+      nb * k,
+      tx * engineerZoom,
+      b * k,
+      a * k,
+      ty * engineerZoom,
+    ]);
+    const alignedShopCanvas = window.document.createElement("canvas");
+    try {
+      cv.warpAffine(
+        shopImage,
+        aligned,
+        affine,
+        new cv.Size(engineer.canvas.width, engineer.canvas.height),
+        cv.INTER_LINEAR,
+        cv.BORDER_CONSTANT,
+        new cv.Scalar(255, 255, 255, 255),
+      );
+      alignedShopCanvas.width = engineer.canvas.width;
+      alignedShopCanvas.height = engineer.canvas.height;
+      cv.imshow(alignedShopCanvas, aligned);
+    } finally {
+      shopImage.delete();
+      aligned.delete();
+      affine.delete();
+    }
+
+    return {
+      result: {
+        alignedShopCanvas,
+        overlayCanvas,
+        registration: {
+          method: "grid",
+          grid,
+          inliers: grid.matchedBubbles,
+          matchedFeatures: grid.shopBubbles,
+          inlierPercent: grid.matchedBubbles / Math.max(1, grid.shopBubbles),
+          scale: grid.scale,
+          expectedScale,
+          rotationDegrees: grid.rotationDegrees,
+          reprojectionError: grid.medianResidualPt,
+        },
+      },
+    };
+  } finally {
+    await Promise.all([engineerPdf.destroy(), shopPdf.destroy()]);
+  }
+}
+
 export async function comparePdfPages(
   engineerFile: File,
   shopFile: File,
@@ -771,6 +905,7 @@ export async function comparePdfPages(
   shopPageNumber: number,
   engineerScaleDenominator: number,
   shopScaleDenominator: number,
+  onProgress?: GridProgress,
 ): Promise<PdfComparison> {
   if (
     !Number.isFinite(engineerScaleDenominator) ||
@@ -787,11 +922,63 @@ export async function comparePdfPages(
     renderPage(shopFile, shopPageNumber),
   ]);
 
-  const { canvas: alignedShopCanvas, registration } = await alignShopPage(
-    engineer.canvas,
-    shop.canvas,
+  const grid = await tryGridAlignment(
+    engineerFile,
+    shopFile,
+    engineerPageNumber,
+    shopPageNumber,
     expectedScale,
+    engineer,
+    shop,
+    onProgress,
   );
+  if (grid.result) {
+    const { alignedShopCanvas, overlayCanvas, registration } = grid.result;
+    const markedPdf = await createMarkedPdf(
+      overlayCanvas,
+      [],
+      overlayCanvas.width,
+      overlayCanvas.height,
+      engineer.pageWidth,
+      engineer.pageHeight,
+      `Grid overlay: red = engineer-issued, blue = shop, black = both. Aligned on ${registration.grid?.gridLabels.length ?? 0} grid lines.`,
+    );
+    return {
+      engineerPreview: engineer.canvas.toDataURL("image/png"),
+      shopPreview: alignedShopCanvas.toDataURL("image/png"),
+      overlayPreview: overlayCanvas.toDataURL("image/png"),
+      width: alignedShopCanvas.width,
+      height: alignedShopCanvas.height,
+      registration,
+      engineerPageCount: engineer.pageCount,
+      shopPageCount: shop.pageCount,
+      engineerPageNumber,
+      shopPageNumber,
+      regions: [],
+      markedPdf,
+    };
+  }
+
+  onProgress?.("Grid alignment unavailable; trying feature matching…");
+  let featureAlignment: Awaited<ReturnType<typeof alignShopPage>>;
+  try {
+    featureAlignment = await alignShopPage(
+      engineer.canvas,
+      shop.canvas,
+      expectedScale,
+    );
+  } catch (error) {
+    const featureReason =
+      error instanceof Error ? error.message : "Feature matching failed.";
+    throw new Error(
+      `${grid.reason} Feature matching also failed: ${featureReason}`,
+    );
+  }
+  const { canvas: alignedShopCanvas } = featureAlignment;
+  const registration: RegistrationSummary = {
+    ...featureAlignment.registration,
+    gridFallbackReason: grid.reason,
+  };
 
   const engineerContext = engineer.canvas.getContext("2d", {
     willReadFrequently: true,

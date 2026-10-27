@@ -44,6 +44,7 @@ export type PdfComparison = {
   regions: DifferenceRegion[];
   /** Red/blue overlay of both sheets (grid method only). */
   overlayPreview?: string;
+  engineerMarkedPdf: Uint8Array;
   markedPdf: Uint8Array;
 };
 
@@ -59,6 +60,7 @@ export type PdfAlignment = {
   autoAlignedShopCanvas: HTMLCanvasElement;
   engineerPreview: string;
   shopPreview: string;
+  overlayPreview?: string;
   width: number;
   height: number;
   registration: RegistrationSummary;
@@ -1113,7 +1115,7 @@ async function tryGridAlignment(
   }
 }
 
-export async function comparePdfPages(
+export async function preparePdfAlignment(
   engineerFile: File,
   shopFile: File,
   engineerPageNumber: number,
@@ -1121,7 +1123,7 @@ export async function comparePdfPages(
   engineerScaleDenominator: number,
   shopScaleDenominator: number,
   onProgress?: GridProgress,
-): Promise<PdfComparison> {
+): Promise<PdfAlignment> {
   if (
     !Number.isFinite(engineerScaleDenominator) ||
     engineerScaleDenominator <= 0 ||
@@ -1149,16 +1151,9 @@ export async function comparePdfPages(
   );
   if (grid.result) {
     const { alignedShopCanvas, overlayCanvas, registration } = grid.result;
-    const markedPdf = await createMarkedPdf(
-      overlayCanvas,
-      [],
-      overlayCanvas.width,
-      overlayCanvas.height,
-      engineer.pageWidth,
-      engineer.pageHeight,
-      `Grid overlay: red = engineer-issued, blue = shop, black = both. Aligned on ${registration.grid?.gridLabels.length ?? 0} grid lines.`,
-    );
     return {
+      engineerCanvas: engineer.canvas,
+      autoAlignedShopCanvas: alignedShopCanvas,
       engineerPreview: engineer.canvas.toDataURL("image/png"),
       shopPreview: alignedShopCanvas.toDataURL("image/png"),
       overlayPreview: overlayCanvas.toDataURL("image/png"),
@@ -1169,8 +1164,8 @@ export async function comparePdfPages(
       shopPageCount: shop.pageCount,
       engineerPageNumber,
       shopPageNumber,
-      regions: [],
-      markedPdf,
+      engineerPageWidth: engineer.pageWidth,
+      engineerPageHeight: engineer.pageHeight,
     };
   }
 
@@ -1180,7 +1175,9 @@ export async function comparePdfPages(
     featureAlignment = await alignShopPage(
       engineer.canvas,
       shop.canvas,
+      expectedScale * engineer.renderScale / shop.renderScale,
       expectedScale,
+      engineer.renderScale,
     );
   } catch (error) {
     const featureReason =
@@ -1196,19 +1193,19 @@ export async function comparePdfPages(
   };
 
   return {
-    engineerCanvas,
+    engineerCanvas: engineer.canvas,
     autoAlignedShopCanvas: alignedShopCanvas,
-    engineerPreview: engineerCanvas.toDataURL("image/png"),
+    engineerPreview: engineer.canvas.toDataURL("image/png"),
     shopPreview: alignedShopCanvas.toDataURL("image/png"),
-    width: engineerCanvas.width,
-    height: engineerCanvas.height,
+    width: engineer.canvas.width,
+    height: engineer.canvas.height,
     registration,
     engineerPageCount: engineer.pageCount,
     shopPageCount: shop.pageCount,
     engineerPageNumber,
     shopPageNumber,
-    engineerPageWidth: pageWidth,
-    engineerPageHeight: pageHeight,
+    engineerPageWidth: engineer.pageWidth,
+    engineerPageHeight: engineer.pageHeight,
   };
 }
 
@@ -1341,6 +1338,7 @@ export async function compareAlignedPdfPages(
   return {
     engineerPreview: engineerCanvas.toDataURL("image/png"),
     shopPreview: alignedShopCanvas.toDataURL("image/png"),
+    overlayPreview: alignment.overlayPreview,
     width: alignedShopCanvas.width,
     height: alignedShopCanvas.height,
     registration: alignment.registration,
@@ -1361,6 +1359,7 @@ export async function comparePdfPages(
   shopPageNumber: number,
   engineerScaleDenominator: number,
   shopScaleDenominator: number,
+  onProgress?: GridProgress,
 ): Promise<PdfComparison> {
   const alignment = await preparePdfAlignment(
     engineerFile,
@@ -1369,6 +1368,7 @@ export async function comparePdfPages(
     shopPageNumber,
     engineerScaleDenominator,
     shopScaleDenominator,
+    onProgress,
   );
   return compareAlignedPdfPages(alignment, {
     offsetX: 0,

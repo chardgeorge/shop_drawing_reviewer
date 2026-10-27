@@ -13,7 +13,6 @@ import type {
   PdfAlignment,
   PdfComparison,
 } from "@/lib/pdf-compare";
-import type { PdfComparison } from "@/lib/pdf-compare";
 import { visionAvailable } from "@/lib/member-compare";
 import type { MemberComparison, MemberStatus } from "@/lib/member-compare";
 
@@ -160,6 +159,8 @@ export default function VisualComparison({
   const [useVision, setUseVision] = useState(false);
   const [visionReady, setVisionReady] = useState(false);
   const [memberFilter, setMemberFilter] = useState<MemberStatus | "issues" | "all">("issues");
+  const comparisonRequest = useRef(0);
+  const currentComparison = comparison as ComparisonDisplay;
 
   useEffect(() => {
     let active = true;
@@ -335,8 +336,10 @@ export default function VisualComparison({
         Number(shopScale),
         setProgress,
       );
-      const pdfBuffer = new ArrayBuffer(result.markedPdf.byteLength);
-      new Uint8Array(pdfBuffer).set(result.markedPdf);
+      const engineerPdfBuffer = new ArrayBuffer(result.engineerMarkedPdf.byteLength);
+      new Uint8Array(engineerPdfBuffer).set(result.engineerMarkedPdf);
+      const shopPdfBuffer = new ArrayBuffer(result.markedPdf.byteLength);
+      new Uint8Array(shopPdfBuffer).set(result.markedPdf);
       setComparison({
         ...result,
         engineerFile: input.engineerFile,

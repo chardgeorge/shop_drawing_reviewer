@@ -8,7 +8,7 @@ An engineering-led application for comparing fabricator steel shop drawings with
 
 - Create projects and upload engineer-issued and shop-drawing PDFs.
 - Extract PDF text and beam schedule rows, preserving page and source evidence.
-- Match members by mark and compare section sizes using deterministic rules.
+- Match members by mark and compare member sizes (AISC shape designations, e.g. `W24x55`) using deterministic rules.
 - Present issues with their source references and allow engineers to review the results.
 - Keep AI optional and limited to drafting explanations from verified findings.
 

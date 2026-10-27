@@ -6,8 +6,8 @@
 
 1. **Project and document foundation:** project create/list/detail; engineer/shop roles; immutable PDF uploads; visible processing states.
 2. **Extraction and provenance:** validate PDFs, extract text, identify beam schedule rows, preserve page/bounding-box evidence, and expose parse warnings.
-3. **Engineer correction loop:** review and correct extracted marks/sections before comparison; retain original values and an audit history.
-4. **Deterministic comparison:** pair accepted beam rows by normalized member mark; flag ambiguity; compare conservative canonical section identifiers; create repeatable findings.
+3. **Engineer correction loop:** review and correct extracted marks/shape designations before comparison; retain original values and an audit history.
+4. **Deterministic comparison:** pair accepted beam rows by normalized member mark; flag ambiguity; compare conservative canonical AISC shape designations; create repeatable findings.
 5. **Issue review UI:** list/filter findings, view source PDF pages, accept/reject/comment, and show rule evidence and run version.
 6. **Hardening and pilot:** golden test corpus, access controls, upload limits, error handling, observability, backups, user acceptance, and deployment runbook.
 
@@ -16,7 +16,7 @@
 - A user can create a project, upload both engineer and shop PDFs, and see independently tracked processing status.
 - A text-based PDF beam schedule yields rows containing raw/canonical values and page/source provenance.
 - Every comparison is repeatable with a recorded rule-set version and input extraction run IDs.
-- Equal sections produce no mismatch; distinct sections for an unambiguous mark produce one warning with both values and source links.
+- Identical shape designations produce no mismatch; different shape designations for an unambiguous mark produce one warning with both values and source links.
 - Duplicate/ambiguous marks do not produce guessed pairings.
 - Failed/unsupported/scanned documents show an explicit actionable state and never appear as an empty successful parse.
 - A reviewer can correct an extracted row and later identify the original extraction and the correction.
@@ -35,7 +35,7 @@ Assumes a small cross-functional team: product/engineering lead, one frontend-ca
 | 4 | Ingestion pipeline | Durable retryable worker queue, PyMuPDF validation/text extraction, per-page dimensions/text, scanned-PDF warning state, and observable failures implemented; PostgreSQL integration runs in CI or when a local database is configured. |
 | 5 | Beam schedule parsing | Implemented a conservative selectable-text parser for one generic two-column header layout; persist raw/canonical values, page/bounding-box provenance, confidence, and warnings. Synthetic parser tests cover normal and duplicate marks. Layout-specific golden-corpus/engineer validation remains open. |
 | 6 | Extraction review UI | Implemented project/PDF upload, ingestion-status polling, browser PDF viewing, extracted-row review, correction, accept/reject, and source provenance. The native browser viewer is used instead of PDF.js. Engineer validation and visual bbox overlays remain open. |
-| 7 | Rule engine and comparison | Stable canonicalizer; mark matching; duplicate/ambiguous handling; `BEAM_SECTION_MISMATCH`; deterministic rule tests. |
+| 7 | Rule engine and comparison | Stable canonicalizer; mark matching; duplicate/ambiguous handling; `BEAM_SHAPE_MISMATCH`; deterministic rule tests. |
 | 8 | Comparison API and issue review | Comparison run snapshots; issue list/filter; evidence navigation; review event workflow; API and UI integration tests. |
 | 9 | Quality and failure behavior | Expand fixture diversity; measure extraction and match metrics; test corrupt, encrypted, scanned, empty, and oversized PDFs; fix high-impact false positives. |
 | 10 | Security and deployment readiness | Hosted authentication integration, authorization tests, secret management, private storage, resource limits, backups, structured logs, and threat review. |
@@ -44,9 +44,9 @@ Assumes a small cross-functional team: product/engineering lead, one frontend-ca
 
 ## 3. Roadmap beyond MVP
 
-**Near term:** robust extraction for multiple schedule layouts, OCR behind an explicit low-confidence path, section catalog validation, CSV/XLSX evidence export, revision comparison, and drawing markup only after viewer/evidence behavior is trusted.
+**Near term:** robust extraction for multiple schedule layouts, OCR behind an explicit low-confidence path, validation of designations against the AISC Shapes Database, CSV/XLSX evidence export, revision comparison, and drawing markup only after viewer/evidence behavior is trusted.
 
-**Later:** column and connection schedule extraction, general arrangement references, notes and revision checks, more configurable organization rules, cloud collaboration, and validated support for additional LLM providers.
+**Later:** column and connection schedule extraction, framing plan and erection drawing references, notes and revision checks, more configurable organization rules, cloud collaboration, and validated support for additional LLM providers.
 
 Each feature requires a labeled test corpus, measured false-positive/false-negative behavior, a human disposition flow, and a migration/versioning plan before enabling it for project work.
 

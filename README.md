@@ -51,7 +51,7 @@ See [Solution architecture](docs/SOLUTION_ARCHITECTURE.md), [Data model](docs/DA
 - PostgreSQL 16+
 - Docker Desktop (optional, for local PostgreSQL)
 
-The prototype is intended for individual engineers running it locally, without login. The frontend is a UI scaffold; the backend currently exposes only a health check. PDF upload, extraction, comparison, and project persistence are not implemented yet.
+The prototype is intended for individual engineers running it locally, without login. The frontend remains a UI scaffold; the backend supports project CRUD and local PDF registration/storage. PDF extraction, comparison, and issue review are not implemented yet.
 
 ## Engineering and data handling principles
 
@@ -64,7 +64,7 @@ The prototype is intended for individual engineers running it locally, without l
 
 ## Development status
 
-The local frontend and initial backend/API, test, CI, and PostgreSQL scaffolds are in place. Project/document workflows, PDF processing, comparisons, and issue review remain to be implemented. Hosted authentication and production data-retention/deployment decisions are out of scope for this prototype.
+The local frontend and backend foundations are in place. Project CRUD and PDF registration now persist to PostgreSQL, with uploaded PDFs stored outside the repository; PDF extraction, comparisons, and issue review remain to be implemented. Hosted authentication and production data-retention/deployment decisions are out of scope for this prototype.
 
 ## Run the frontend preview
 
@@ -95,9 +95,15 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
+```
+
+Apply the initial schema and start the API:
+
+```powershell
+python -m app.migrate
 uvicorn app.main:app --reload
 ```
 
-The API health check is at `http://localhost:8000/health`; interactive API documentation is at `http://localhost:8000/docs`. The database is bound to localhost and uses prototype-only credentials. The initial schema in `backend/migrations/` is not automatically applied yet. Stop the API with Ctrl+C and stop PostgreSQL with `docker compose down` from the repository root.
+The API health check is at `http://localhost:8000/health`; interactive API documentation is at `http://localhost:8000/docs`. Project create/list/detail/update/delete routes are available under `/api/v1/projects`; multipart PDF upload and document listing are available under `/api/v1/projects/{project_id}/documents`. Uploaded PDFs default to `%LOCALAPPDATA%\ShopDrawingReviewer\uploads` on Windows or `~/.local/share/shop-drawing-reviewer/uploads` elsewhere; set `SHOP_REVIEWER_STORAGE_DIR` to choose another local folder. Uploads are validated for filename, media type, non-empty content, and PDF header, but are not yet fully parsed. No prototype size/page limit is imposed. The database is bound to localhost and uses prototype-only credentials. Stop the API with Ctrl+C and stop PostgreSQL with `docker compose down` from the repository root.
 
-Run backend checks from `backend/` with `ruff check app tests` and `pytest`.
+Run backend checks from `backend/` with `ruff check app tests` and `pytest`. PostgreSQL integration tests run when `TEST_DATABASE_URL` is set and migrations have been applied; the CI workflow provisions a test database automatically.

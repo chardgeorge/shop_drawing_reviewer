@@ -30,8 +30,8 @@ Assumes a small cross-functional team: product/engineering lead, one frontend-ca
 | Week | Focus | Deliverable / exit gate |
 |---|---|---|
 | 1 | Product decisions and repository setup | Prototype scope agreed. Frontend/backend/test scaffolds, CI, and local Postgres configuration are in place; verify them in a configured local environment. |
-| 2 | Data model and project API | Apply initial migrations; project CRUD; typed API contract; project authorization seam; API integration tests. |
-| 3 | Document registration and storage | Local filesystem adapter and hosted-storage interface; upload lifecycle; immutable revisions; size/type validation; access control tests. |
+| 2 | Data model and project API | Project CRUD, typed API contract, migration runner, PostgreSQL integration tests, and CI database service implemented; PostgreSQL integration verification runs in CI or locally when a database is configured. |
+| 3 | Document registration and storage | Local filesystem-backed multipart upload, opaque immutable storage keys, PDF metadata/hash registration, validation, listing, and PostgreSQL integration coverage implemented; hosted-storage adapter remains deferred. |
 | 4 | Ingestion pipeline | Worker/job lifecycle and retries; PDF validation/page metadata; PyMuPDF text extraction; observable failure states and diagnostics. |
 | 5 | Beam schedule parsing | Parse the first agreed schedule layout; capture raw rows, mark, section, page and bounding box; begin golden synthetic/approved fixture set. |
 | 6 | Extraction review UI | Document status screen, PDF.js page viewer, extracted-row table, corrections and provenance; structural engineer review of extraction errors. |

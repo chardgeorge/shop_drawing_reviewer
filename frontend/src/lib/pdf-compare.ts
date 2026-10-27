@@ -59,10 +59,18 @@ export type PdfAlignment = {
   engineerPageHeight: number;
 };
 
+export class PdfAlignmentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PdfAlignmentError";
+  }
+}
+
 type RenderedPage = {
   canvas: HTMLCanvasElement;
   pageWidth: number;
   pageHeight: number;
+  renderScale: number;
   pageCount: number;
 };
 
@@ -135,6 +143,7 @@ async function renderPage(file: File, pageNumber: number): Promise<RenderedPage>
       canvas,
       pageWidth: baseViewport.width,
       pageHeight: baseViewport.height,
+      renderScale: scale,
       pageCount: document.numPages,
     };
   } finally {
@@ -381,8 +390,16 @@ function estimateAffineTransform(points: MatchedFeature[]) {
 async function alignShopPage(
   engineerCanvas: HTMLCanvasElement,
   shopCanvas: HTMLCanvasElement,
+  expectedPixelScale: number,
   expectedScale: number,
-): Promise<{ canvas: HTMLCanvasElement; registration: RegistrationSummary }> {
+  engineerRenderScale: number,
+): Promise<{
+  engineerCanvas: HTMLCanvasElement;
+  canvas: HTMLCanvasElement;
+  pageWidth: number;
+  pageHeight: number;
+  registration: RegistrationSummary;
+}> {
   const cv = await loadOpenCv();
   const engineerImage = cv.imread(engineerCanvas);
   const shopImage = cv.imread(shopCanvas);
@@ -418,7 +435,7 @@ async function alignShopPage(
     );
 
     if (engineerDescriptors.empty() || shopDescriptors.empty()) {
-      throw new Error(
+      throw new PdfAlignmentError(
         "Could not find enough visual features to align these pages. Use drawings with more shared visible detail.",
       );
     }
@@ -457,14 +474,14 @@ async function alignShopPage(
     }
 
     if (matchedFeatures.length < MIN_REGISTRATION_INLIERS) {
-      throw new Error(
+      throw new PdfAlignmentError(
         "Could not find enough matching features to align the pages. Make sure both drawings show the same plan area.",
       );
     }
 
     const estimate = estimateAffineTransform(matchedFeatures);
     if (!estimate) {
-      throw new Error(
+      throw new PdfAlignmentError(
         "Could not compute a reliable page alignment. Use drawings with more shared visible detail.",
       );
     }
@@ -485,8 +502,8 @@ async function alignShopPage(
         estimate.transform.b * estimate.transform.c,
     ));
     const scaleAgreement = Math.max(
-      scale / expectedScale,
-      expectedScale / scale,
+      scale / expectedPixelScale,
+      expectedPixelScale / scale,
     );
     const rotationDegrees =
       (Math.atan2(estimate.transform.b, estimate.transform.a) * 180) / Math.PI;
@@ -540,39 +557,94 @@ async function alignShopPage(
       scaleAgreement > MAX_SCALE_RATIO_DEVIATION
     ) {
       if (validTransform && scaleAgreement > MAX_SCALE_RATIO_DEVIATION) {
-        throw new Error(
-          `The detected scale change (${scale.toFixed(3)}×) does not match the selected sheet scales (expected ${expectedScale.toFixed(3)}× from shop to engineer). Check the page selections and drawing scale inputs.`,
+        throw new PdfAlignmentError(
+          `The detected pixel scale change (${scale.toFixed(3)}×) does not match the page-size-adjusted expectation (${expectedPixelScale.toFixed(3)}×; selected shop-to-engineer drawing scale ratio ${expectedScale.toFixed(3)}×). Check the page selections and drawing scale inputs.`,
         );
       }
-      throw new Error(
+      throw new PdfAlignmentError(
         `Automatic alignment confidence is too low (${inliers} consistent features, ${Math.round(inlierPercent * 100)}% inliers). Use a clearer pair with more shared drawing content.`,
       );
     }
 
+    const shopCorners = [
+      { x: 0, y: 0 },
+      { x: shopCanvas.width, y: 0 },
+      { x: 0, y: shopCanvas.height },
+      { x: shopCanvas.width, y: shopCanvas.height },
+    ].map((point) => mapPoint(estimate.transform, point));
+    const minimumX = Math.min(0, ...shopCorners.map((point) => point.x));
+    const minimumY = Math.min(0, ...shopCorners.map((point) => point.y));
+    const maximumX = Math.max(
+      engineerCanvas.width,
+      ...shopCorners.map((point) => point.x),
+    );
+    const maximumY = Math.max(
+      engineerCanvas.height,
+      ...shopCorners.map((point) => point.y),
+    );
+    const boundsWidth = maximumX - minimumX;
+    const boundsHeight = maximumY - minimumY;
+    if (
+      !Number.isFinite(boundsWidth) ||
+      !Number.isFinite(boundsHeight) ||
+      boundsWidth <= 0 ||
+      boundsHeight <= 0
+    ) {
+      throw new Error("Could not calculate a shared canvas for these pages.");
+    }
+
+    const outputScale = Math.min(
+      1,
+      MAX_RENDER_DIMENSION / Math.max(boundsWidth, boundsHeight),
+    );
+    const outputWidth = Math.max(1, Math.ceil(boundsWidth * outputScale));
+    const outputHeight = Math.max(1, Math.ceil(boundsHeight * outputScale));
+    const offsetX = -minimumX * outputScale;
+    const offsetY = -minimumY * outputScale;
+    const outputEngineer = window.document.createElement("canvas");
+    outputEngineer.width = outputWidth;
+    outputEngineer.height = outputHeight;
+    const engineerContext = outputEngineer.getContext("2d");
+    if (!engineerContext) {
+      throw new Error("This browser could not create a shared PDF comparison canvas.");
+    }
+    engineerContext.fillStyle = "#fff";
+    engineerContext.fillRect(0, 0, outputWidth, outputHeight);
+    engineerContext.drawImage(
+      engineerCanvas,
+      offsetX,
+      offsetY,
+      engineerCanvas.width * outputScale,
+      engineerCanvas.height * outputScale,
+    );
+
     affine = cv.matFromArray(2, 3, cv.CV_64FC1, [
-      estimate.transform.a,
-      estimate.transform.c,
-      estimate.transform.tx,
-      estimate.transform.b,
-      estimate.transform.d,
-      estimate.transform.ty,
+      estimate.transform.a * outputScale,
+      estimate.transform.c * outputScale,
+      (estimate.transform.tx - minimumX) * outputScale,
+      estimate.transform.b * outputScale,
+      estimate.transform.d * outputScale,
+      (estimate.transform.ty - minimumY) * outputScale,
     ]);
     aligned = new cv.Mat();
     cv.warpAffine(
       shopImage,
       aligned,
       affine,
-      new cv.Size(engineerCanvas.width, engineerCanvas.height),
+      new cv.Size(outputWidth, outputHeight),
       cv.INTER_LINEAR,
       cv.BORDER_CONSTANT,
       new cv.Scalar(255, 255, 255, 255),
     );
     const canvas = window.document.createElement("canvas");
-    canvas.width = engineerCanvas.width;
-    canvas.height = engineerCanvas.height;
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
     cv.imshow(canvas, aligned);
     return {
+      engineerCanvas: outputEngineer,
       canvas,
+      pageWidth: outputWidth / (engineerRenderScale * outputScale),
+      pageHeight: outputHeight / (engineerRenderScale * outputScale),
       registration: {
         inliers,
         matchedFeatures: matchedFeatures.length,
@@ -929,33 +1001,44 @@ export async function preparePdfAlignment(
     renderPage(shopFile, shopPageNumber),
   ]);
 
-  const { canvas: alignedShopCanvas, registration } = await alignShopPage(
+  const expectedPixelScale =
+    expectedScale * (engineer.renderScale / shop.renderScale);
+  const {
+    engineerCanvas,
+    canvas: alignedShopCanvas,
+    pageWidth,
+    pageHeight,
+    registration,
+  } = await alignShopPage(
     engineer.canvas,
     shop.canvas,
+    expectedPixelScale,
     expectedScale,
+    engineer.renderScale,
   );
 
   return {
-    engineerCanvas: engineer.canvas,
+    engineerCanvas,
     autoAlignedShopCanvas: alignedShopCanvas,
-    engineerPreview: engineer.canvas.toDataURL("image/png"),
+    engineerPreview: engineerCanvas.toDataURL("image/png"),
     shopPreview: alignedShopCanvas.toDataURL("image/png"),
-    width: engineer.canvas.width,
-    height: engineer.canvas.height,
+    width: engineerCanvas.width,
+    height: engineerCanvas.height,
     registration,
     engineerPageCount: engineer.pageCount,
     shopPageCount: shop.pageCount,
     engineerPageNumber,
     shopPageNumber,
-    engineerPageWidth: engineer.pageWidth,
-    engineerPageHeight: engineer.pageHeight,
+    engineerPageWidth: pageWidth,
+    engineerPageHeight: pageHeight,
   };
 }
 
 function applyManualAlignment(
-  source: HTMLCanvasElement,
+  engineerSource: HTMLCanvasElement,
+  shopSource: HTMLCanvasElement,
   alignment: ManualAlignment,
-): HTMLCanvasElement {
+): { engineerCanvas: HTMLCanvasElement; shopCanvas: HTMLCanvasElement } {
   if (
     !Number.isFinite(alignment.offsetX) ||
     !Number.isFinite(alignment.offsetY) ||
@@ -966,36 +1049,75 @@ function applyManualAlignment(
     throw new Error("Enter valid manual alignment adjustments.");
   }
 
-  const canvas = window.document.createElement("canvas");
-  canvas.width = source.width;
-  canvas.height = source.height;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) {
-    throw new Error("This browser could not create a canvas for manual alignment.");
+  const centerX = shopSource.width / 2;
+  const centerY = shopSource.height / 2;
+  const radians = (alignment.rotationDegrees * Math.PI) / 180;
+  const a = Math.cos(radians) * alignment.scale;
+  const b = Math.sin(radians) * alignment.scale;
+  const c = -Math.sin(radians) * alignment.scale;
+  const d = Math.cos(radians) * alignment.scale;
+  const transformPoint = (x: number, y: number) => ({
+    x: centerX + alignment.offsetX + a * (x - centerX) + c * (y - centerY),
+    y: centerY + alignment.offsetY + b * (x - centerX) + d * (y - centerY),
+  });
+  const transformedCorners = [
+    transformPoint(0, 0),
+    transformPoint(shopSource.width, 0),
+    transformPoint(0, shopSource.height),
+    transformPoint(shopSource.width, shopSource.height),
+  ];
+  const minimumX = Math.min(0, ...transformedCorners.map(({ x }) => x));
+  const minimumY = Math.min(0, ...transformedCorners.map(({ y }) => y));
+  const outputWidth = Math.ceil(
+    Math.max(engineerSource.width, ...transformedCorners.map(({ x }) => x)) -
+      minimumX,
+  );
+  const outputHeight = Math.ceil(
+    Math.max(engineerSource.height, ...transformedCorners.map(({ y }) => y)) -
+      minimumY,
+  );
+  const engineerCanvas = window.document.createElement("canvas");
+  const shopCanvas = window.document.createElement("canvas");
+  for (const canvas of [engineerCanvas, shopCanvas]) {
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
+  }
+  const engineerContext = engineerCanvas.getContext("2d", {
+    willReadFrequently: true,
+  });
+  const shopContext = shopCanvas.getContext("2d", { willReadFrequently: true });
+  if (!engineerContext || !shopContext) {
+    throw new Error("This browser could not create canvases for manual alignment.");
   }
 
-  context.fillStyle = "#fff";
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.translate(
-    canvas.width / 2 + alignment.offsetX,
-    canvas.height / 2 + alignment.offsetY,
+  engineerContext.fillStyle = "#fff";
+  engineerContext.fillRect(0, 0, outputWidth, outputHeight);
+  engineerContext.drawImage(engineerSource, -minimumX, -minimumY);
+
+  shopContext.fillStyle = "#fff";
+  shopContext.fillRect(0, 0, outputWidth, outputHeight);
+  shopContext.setTransform(
+    a,
+    b,
+    c,
+    d,
+    centerX + alignment.offsetX - a * centerX - c * centerY - minimumX,
+    centerY + alignment.offsetY - b * centerX - d * centerY - minimumY,
   );
-  context.rotate((alignment.rotationDegrees * Math.PI) / 180);
-  context.scale(alignment.scale, alignment.scale);
-  context.translate(-canvas.width / 2, -canvas.height / 2);
-  context.drawImage(source, 0, 0);
-  return canvas;
+  shopContext.drawImage(shopSource, 0, 0);
+  return { engineerCanvas, shopCanvas };
 }
 
 export async function compareAlignedPdfPages(
   alignment: PdfAlignment,
   manualAlignment: ManualAlignment,
 ): Promise<PdfComparison> {
-  const alignedShopCanvas = applyManualAlignment(
+  const { engineerCanvas, shopCanvas: alignedShopCanvas } = applyManualAlignment(
+    alignment.engineerCanvas,
     alignment.autoAlignedShopCanvas,
     manualAlignment,
   );
-  const engineerContext = alignment.engineerCanvas.getContext("2d", {
+  const engineerContext = engineerCanvas.getContext("2d", {
     willReadFrequently: true,
   });
   const alignedShopContext = alignedShopCanvas.getContext("2d", {
@@ -1009,8 +1131,8 @@ export async function compareAlignedPdfPages(
     engineerContext.getImageData(
       0,
       0,
-      alignment.engineerCanvas.width,
-      alignment.engineerCanvas.height,
+      engineerCanvas.width,
+      engineerCanvas.height,
     ),
     alignedShopContext.getImageData(
       0,
@@ -1021,25 +1143,25 @@ export async function compareAlignedPdfPages(
   );
   const [engineerMarkedPdf, markedPdf] = await Promise.all([
     createMarkedPdf(
-      alignment.engineerCanvas,
+      engineerCanvas,
       regions,
-      alignment.engineerCanvas.width,
-      alignment.engineerCanvas.height,
-      alignment.engineerPageWidth,
-      alignment.engineerPageHeight,
+      engineerCanvas.width,
+      engineerCanvas.height,
+      alignment.engineerPageWidth * (engineerCanvas.width / alignment.width),
+      alignment.engineerPageHeight * (engineerCanvas.height / alignment.height),
     ),
     createMarkedPdf(
       alignedShopCanvas,
       regions,
       alignedShopCanvas.width,
       alignedShopCanvas.height,
-      alignment.engineerPageWidth,
-      alignment.engineerPageHeight,
+      alignment.engineerPageWidth * (engineerCanvas.width / alignment.width),
+      alignment.engineerPageHeight * (engineerCanvas.height / alignment.height),
     ),
   ]);
 
   return {
-    engineerPreview: alignment.engineerCanvas.toDataURL("image/png"),
+    engineerPreview: engineerCanvas.toDataURL("image/png"),
     shopPreview: alignedShopCanvas.toDataURL("image/png"),
     width: alignedShopCanvas.width,
     height: alignedShopCanvas.height,

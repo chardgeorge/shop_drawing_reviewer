@@ -5,6 +5,7 @@ import {
   compareAlignedPdfPages,
   getPdfPageCount,
   preparePdfAlignment,
+  PdfAlignmentError,
 } from "@/lib/pdf-compare";
 import type {
   ManualAlignment,
@@ -20,6 +21,12 @@ type CompareDrawing = {
 type ComparisonDisplay = Omit<PdfComparison, "markedPdf" | "engineerMarkedPdf"> & {
   engineerMarkedPdfUrl: string;
   markedPdfUrl: string;
+  engineerFile: File;
+  shopFile: File;
+  engineerId: string;
+  shopId: string;
+  engineerScale: string;
+  shopScale: string;
 };
 
 const IMPERIAL_SCALES = [
@@ -131,7 +138,9 @@ export default function VisualComparison({
     offsetX: number;
     offsetY: number;
   } | null>(null);
+  const [alignmentWarning, setAlignmentWarning] = useState("");
   const [comparison, setComparison] = useState<ComparisonDisplay | null>(null);
+  const comparisonRequest = useRef(0);
 
   const engineerFile = engineeringFiles.find((item) => item.id === engineerId)?.file;
   const shopFile = shopFiles.find((item) => item.id === shopId)?.file;
@@ -147,6 +156,23 @@ export default function VisualComparison({
       setShopId(shopFiles[0]?.id ?? "");
     }
   }, [shopId, shopFiles]);
+
+  useEffect(() => {
+    comparisonRequest.current += 1;
+    setComparison(null);
+    setIsComparing(false);
+    setNotice("");
+    setAlignmentWarning("");
+  }, [
+    engineerFile,
+    engineerId,
+    engineerPage,
+    engineerScale,
+    shopFile,
+    shopId,
+    shopPage,
+    shopScale,
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -199,19 +225,33 @@ export default function VisualComparison({
   async function runAlignment() {
     if (!engineerFile || !shopFile || !engineerScale || !shopScale) return;
     onCompareStart?.();
+    const requestId = comparisonRequest.current + 1;
+    comparisonRequest.current = requestId;
+    const input = {
+      engineerFile,
+      shopFile,
+      engineerId,
+      shopId,
+      engineerPage,
+      shopPage,
+      engineerScale,
+      shopScale,
+    };
     setIsComparing(true);
     setNotice("");
+    setAlignmentWarning("");
     setComparison(null);
     setAlignment(null);
     try {
       const result = await preparePdfAlignment(
-        engineerFile,
-        shopFile,
-        engineerPage,
-        shopPage,
-        Number(engineerScale),
-        Number(shopScale),
+        input.engineerFile,
+        input.shopFile,
+        input.engineerPage,
+        input.shopPage,
+        Number(input.engineerScale),
+        Number(input.shopScale),
       );
+      if (comparisonRequest.current !== requestId) return;
       setManualAlignment({
         offsetX: 0,
         offsetY: 0,
@@ -220,27 +260,53 @@ export default function VisualComparison({
       });
       setAlignment(result);
     } catch (error) {
-      setNotice(
-        error instanceof Error ? error.message : "The PDF alignment failed unexpectedly.",
-      );
+      if (comparisonRequest.current === requestId) {
+        if (error instanceof PdfAlignmentError) {
+          setAlignmentWarning(error.message);
+        } else {
+          setNotice(
+            error instanceof Error
+              ? error.message
+              : "The PDF alignment failed unexpectedly.",
+          );
+        }
+      }
     } finally {
-      setIsComparing(false);
+      if (comparisonRequest.current === requestId) setIsComparing(false);
     }
   }
 
   async function runComparison() {
-    if (!alignment) return;
+    if (!alignment || !engineerFile || !shopFile) return;
+    const requestId = comparisonRequest.current + 1;
+    comparisonRequest.current = requestId;
+    const input = {
+      engineerFile,
+      shopFile,
+      engineerId,
+      shopId,
+      engineerScale,
+      shopScale,
+    };
     setIsComparing(true);
     setNotice("");
+    setAlignmentWarning("");
     setComparison(null);
     try {
       const result = await compareAlignedPdfPages(alignment, manualAlignment);
+      if (comparisonRequest.current !== requestId) return;
       const engineerPdfBuffer = new ArrayBuffer(result.engineerMarkedPdf.byteLength);
       new Uint8Array(engineerPdfBuffer).set(result.engineerMarkedPdf);
       const shopPdfBuffer = new ArrayBuffer(result.markedPdf.byteLength);
       new Uint8Array(shopPdfBuffer).set(result.markedPdf);
       setComparison({
         ...result,
+        engineerFile: input.engineerFile,
+        shopFile: input.shopFile,
+        engineerId: input.engineerId,
+        shopId: input.shopId,
+        engineerScale: input.engineerScale,
+        shopScale: input.shopScale,
         engineerMarkedPdfUrl: URL.createObjectURL(
           new Blob([engineerPdfBuffer], { type: "application/pdf" }),
         ),
@@ -249,13 +315,30 @@ export default function VisualComparison({
         ),
       });
     } catch (error) {
-      setNotice(
-        error instanceof Error ? error.message : "The PDF comparison failed unexpectedly.",
-      );
+      if (comparisonRequest.current === requestId) {
+        setNotice(
+          error instanceof Error
+            ? error.message
+            : "The PDF comparison failed unexpectedly.",
+        );
+      }
     } finally {
-      setIsComparing(false);
+      if (comparisonRequest.current === requestId) setIsComparing(false);
     }
   }
+
+  const currentComparison =
+    comparison &&
+    comparison.engineerId === engineerId &&
+    comparison.shopId === shopId &&
+    comparison.engineerFile === engineerFile &&
+    comparison.shopFile === shopFile &&
+    comparison.engineerScale === engineerScale &&
+    comparison.shopScale === shopScale &&
+    comparison.engineerPageNumber === engineerPage &&
+    comparison.shopPageNumber === shopPage
+      ? comparison
+      : null;
 
   const canCompare =
     Boolean(engineerFile && shopFile) &&
@@ -279,6 +362,8 @@ export default function VisualComparison({
             check is separate from project upload and schedule extraction. Select
             the drawing scale shown on each page so alignment can verify the
             expected scale relationship.
+            Different page dimensions are automatically fitted to one shared
+            canvas, with white space added as needed so neither page is cropped.
           </p>
         </div>
       </div>
@@ -419,6 +504,17 @@ export default function VisualComparison({
       </div>
 
       {notice && <p className="notice-message" role="alert">{notice}</p>}
+      {alignmentWarning && (
+        <div className="alignment-warning" role="alert">
+          <strong>Possible drawing misalignment</strong>
+          <p>
+            These selected pages could not be aligned confidently, so no
+            difference result was generated. Common causes include overlapping
+            lines, cluttered or inconsistently organized labeling, pages showing
+            different drawing areas, or incorrect printed scales.
+          </p>
+        </div>
+      )}
 
       {alignment && !comparison && (
         <div className="alignment-editor">
@@ -580,31 +676,35 @@ export default function VisualComparison({
         </div>
       )}
 
-      {comparison && (
+      {currentComparison && (
         <div className="comparison-result">
           <div className="comparison-result-heading">
             <div>
               <h3>
-                {comparison.regions.length === 0
+                {currentComparison.regions.length === 0
                   ? "No candidate changes detected"
-                  : `${comparison.regions.length} visual change region${comparison.regions.length === 1 ? "" : "s"} found`}
+                  : `${currentComparison.regions.length} visual change region${currentComparison.regions.length === 1 ? "" : "s"} found`}
               </h3>
               <p>
-                Highlighted areas are visual candidates, not engineering conclusions.
+                Comparing {currentComparison.engineerFile.name} page{" "}
+                {currentComparison.engineerPageNumber} with{" "}
+                {currentComparison.shopFile.name} page{" "}
+                {currentComparison.shopPageNumber}. Highlighted areas are visual
+                candidates, not engineering conclusions.
               </p>
             </div>
             <div className="comparison-downloads">
               <a
                 className="marked-pdf-link"
-                href={comparison.engineerMarkedPdfUrl}
-                download={`${engineerFile?.name.replace(/\.pdf$/i, "") ?? "engineer-drawing"}-page-${engineerPage}-marked-up.pdf`}
+                href={currentComparison.engineerMarkedPdfUrl}
+                download={`${currentComparison.engineerFile.name.replace(/\.pdf$/i, "")}-page-${currentComparison.engineerPageNumber}-marked-up.pdf`}
               >
                 Download marked engineer page
               </a>
               <a
                 className="marked-pdf-link"
-                href={comparison.markedPdfUrl}
-                download={`${shopFile?.name.replace(/\.pdf$/i, "") ?? "shop-drawing"}-page-${shopPage}-aligned-marked-up.pdf`}
+                href={currentComparison.markedPdfUrl}
+                download={`${currentComparison.shopFile.name.replace(/\.pdf$/i, "")}-page-${currentComparison.shopPageNumber}-aligned-marked-up.pdf`}
               >
                 Download aligned marked shop page
               </a>
@@ -619,13 +719,17 @@ export default function VisualComparison({
             Show 10 × 10 alignment grid on both pages
           </label>
           <p className="registration-summary">
-            Aligned with {comparison.registration.inliers} reciprocal feature
-            matches ({Math.round(comparison.registration.inlierPercent * 100)}%
-            inliers), average scale {comparison.registration.scale.toFixed(3)}×,
+            Aligned with {currentComparison.registration.inliers} reciprocal
+            feature matches (
+            {Math.round(currentComparison.registration.inlierPercent * 100)}%
+            inliers), average scale{" "}
+            {currentComparison.registration.scale.toFixed(3)}×,
             expected scale from the selected sheet scales{" "}
-            {comparison.registration.expectedScale.toFixed(3)}×,
-            rotation {comparison.registration.rotationDegrees.toFixed(1)}°,
-            residual {comparison.registration.reprojectionError.toFixed(2)} px.
+            {currentComparison.registration.expectedScale.toFixed(3)}×,
+            rotation{" "}
+            {currentComparison.registration.rotationDegrees.toFixed(1)}°,
+            residual{" "}
+            {currentComparison.registration.reprojectionError.toFixed(2)} px.
           </p>
           <p className="comparison-caveat">
             Automatic alignment handles scale, rotation, translation, moderate
@@ -638,21 +742,28 @@ export default function VisualComparison({
           <div className="comparison-previews">
             <figure className="comparison-preview">
               <figcaption>
-                Engineer-issued · page {comparison.engineerPageNumber} · candidate discrepancies
+                {currentComparison.engineerFile.name} · page{" "}
+                {currentComparison.engineerPageNumber} · candidate discrepancies
               </figcaption>
               <div className="comparison-image-wrap">
                 <img
-                  src={comparison.engineerPreview}
-                  alt="Engineer-issued drawing page with candidate discrepancy regions"
+                  src={currentComparison.engineerPreview}
+                  alt={`Engineer-issued drawing page ${currentComparison.engineerPageNumber} with candidate discrepancy regions`}
                 />
-                <ComparisonOverlay comparison={comparison} showGrid={showGrid} />
+                <ComparisonOverlay comparison={currentComparison} showGrid={showGrid} />
               </div>
             </figure>
             <figure className="comparison-preview">
-              <figcaption>Aligned shop page · visual candidates</figcaption>
+              <figcaption>
+                Aligned {currentComparison.shopFile.name} · page{" "}
+                {currentComparison.shopPageNumber} · visual candidates
+              </figcaption>
               <div className="comparison-image-wrap">
-                <img src={comparison.shopPreview} alt="Aligned shop drawing page" />
-                <ComparisonOverlay comparison={comparison} showGrid={showGrid} />
+                <img
+                  src={currentComparison.shopPreview}
+                  alt={`Aligned page ${currentComparison.shopPageNumber} from ${currentComparison.shopFile.name}`}
+                />
+                <ComparisonOverlay comparison={currentComparison} showGrid={showGrid} />
               </div>
             </figure>
           </div>

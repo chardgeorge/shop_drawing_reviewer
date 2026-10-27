@@ -36,6 +36,8 @@ class FileStorage(Protocol):
 
     def delete(self, storage_key: str) -> None: ...
 
+    def open(self, storage_key: str) -> BinaryIO: ...
+
 
 def default_storage_root() -> Path:
     configured_root = os.environ.get("SHOP_REVIEWER_STORAGE_DIR")
@@ -113,6 +115,9 @@ class LocalFileStorage:
     def delete(self, storage_key: str) -> None:
         path = self._resolve_key(storage_key)
         path.unlink(missing_ok=True)
+
+    def open(self, storage_key: str) -> BinaryIO:
+        return self._resolve_key(storage_key).open("rb")
 
     def _resolve_key(self, storage_key: str) -> Path:
         relative_path = Path(storage_key)

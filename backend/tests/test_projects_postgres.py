@@ -2,12 +2,17 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
+import psycopg
+import pymupdf
 import pytest
 from fastapi.testclient import TestClient
+from psycopg.rows import dict_row
 
 from app.documents.router import get_document_storage
 from app.documents.storage import LocalFileStorage
 from app.main import app
+from app.worker.repository import IngestionRepository
+from app.worker.runner import IngestionWorker
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -90,6 +95,10 @@ def test_document_upload_persists_metadata_and_pdf(
     app.dependency_overrides[get_document_storage] = lambda: storage
     project_id: str | None = None
     storage_key: str | None = None
+    pdf_document = pymupdf.open()
+    pdf_document.new_page().insert_text((72, 100), "Synthetic schedule text")
+    pdf_bytes = pdf_document.tobytes()
+    pdf_document.close()
 
     with TestClient(app) as client:
         try:
@@ -106,17 +115,56 @@ def test_document_upload_persists_metadata_and_pdf(
                 files={
                     "file": (
                         "schedule.pdf",
-                        b"%PDF-1.7\nsynthetic integration document\n%%EOF\n",
+                        pdf_bytes,
                         "application/pdf",
                     )
                 },
             )
             assert upload.status_code == 201
-            assert upload.json()["status"] == "uploaded"
+            assert upload.json()["status"] == "queued"
+            assert upload.json()["extraction"]["status"] == "queued"
             assert upload.json()["file_name"] == "schedule.pdf"
             detail = client.get(f"/api/v1/documents/{upload.json()['id']}")
             assert detail.status_code == 200
             assert detail.json()["id"] == upload.json()["id"]
+
+            with psycopg.connect(
+                TEST_DATABASE_URL,
+                autocommit=True,
+                row_factory=dict_row,
+            ) as connection:
+                worker = IngestionWorker(
+                    repository=IngestionRepository(connection),
+                    storage=storage,
+                    connection=connection,
+                )
+                assert worker.run_once() is True
+
+            processed = client.get(
+                f"/api/v1/documents/{upload.json()['id']}"
+            ).json()
+            assert processed["status"] == "ready"
+            assert processed["extraction"]["status"] == "completed"
+            assert processed["extraction"]["page_count"] == 1
+            assert (
+                processed["extraction"]["diagnostics"]["content_status"]
+                == "selectable_text"
+            )
+
+            with psycopg.connect(TEST_DATABASE_URL, row_factory=dict_row) as verify:
+                page = verify.execute(
+                    """
+                    SELECT text_content, page_width, page_height
+                    FROM extracted_pages
+                    WHERE extraction_run_id = (
+                        SELECT id FROM extraction_runs WHERE document_id = %s
+                    )
+                    """,
+                    (upload.json()["id"],),
+                ).fetchone()
+            assert "Synthetic schedule text" in page["text_content"]
+            assert page["page_width"] > 0
+            assert page["page_height"] > 0
 
             listing = client.get(f"/api/v1/projects/{project_id}/documents")
             assert listing.status_code == 200

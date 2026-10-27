@@ -64,7 +64,7 @@ The prototype is intended for individual engineers running it locally, without l
 
 ## Development status
 
-The local frontend and backend foundations are in place. Project CRUD and PDF registration now persist to PostgreSQL, with uploaded PDFs stored outside the repository; PDF extraction, comparisons, and issue review remain to be implemented. Hosted authentication and production data-retention/deployment decisions are out of scope for this prototype.
+The local frontend and backend foundations are in place. Project CRUD and PDF registration now persist to PostgreSQL, with uploaded PDFs stored outside the repository. A separate worker validates uploaded PDFs, records page metadata and selectable text, and reports explicit processing states; beam schedule parsing, comparisons, and issue review remain to be implemented. Hosted authentication and production data-retention/deployment decisions are out of scope for this prototype.
 
 ## Run the frontend preview
 
@@ -104,6 +104,14 @@ python -m app.migrate
 uvicorn app.main:app --reload
 ```
 
-The API health check is at `http://localhost:8000/health`; interactive API documentation is at `http://localhost:8000/docs`. Project create/list/detail/update/delete routes are available under `/api/v1/projects`; multipart PDF upload and document listing are available under `/api/v1/projects/{project_id}/documents`. Uploaded PDFs default to `%LOCALAPPDATA%\ShopDrawingReviewer\uploads` on Windows or `~/.local/share/shop-drawing-reviewer/uploads` elsewhere; set `SHOP_REVIEWER_STORAGE_DIR` to choose another local folder. Uploads are validated for filename, media type, non-empty content, and PDF header, but are not yet fully parsed. No prototype size/page limit is imposed. The database is bound to localhost and uses prototype-only credentials. Stop the API with Ctrl+C and stop PostgreSQL with `docker compose down` from the repository root.
+Start the worker in a third terminal, using the same backend virtual environment:
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+python -m app.worker.runner
+```
+
+The worker polls the PostgreSQL queue and retries transient failures up to three times. For a single-job run, use `python -m app.worker.runner --once`. The API health check is at `http://localhost:8000/health`; interactive API documentation is at `http://localhost:8000/docs`. Project create/list/detail/update/delete routes are available under `/api/v1/projects`; multipart PDF upload and document listing are available under `/api/v1/projects/{project_id}/documents`. Uploaded PDFs default to `%LOCALAPPDATA%\ShopDrawingReviewer\uploads` on Windows or `~/.local/share/shop-drawing-reviewer/uploads` elsewhere; set `SHOP_REVIEWER_STORAGE_DIR` to choose another local folder. Uploads are checked for a PDF header, then the worker validates and extracts page dimensions and selectable text. Scanned/no-text files are marked `needs_review` with an OCR-not-enabled warning; corrupt and encrypted PDFs receive explicit failure statuses. No prototype size/page limit is imposed. The database is bound to localhost and uses prototype-only credentials. Stop the API and worker with Ctrl+C and stop PostgreSQL with `docker compose down` from the repository root.
 
 Run backend checks from `backend/` with `ruff check app tests` and `pytest`. PostgreSQL integration tests run when `TEST_DATABASE_URL` is set and migrations have been applied; the CI workflow provisions a test database automatically.

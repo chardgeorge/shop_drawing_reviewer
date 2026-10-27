@@ -101,7 +101,7 @@ def upload_document(
         file.file.close()
 
     try:
-        document = repository.create(
+        document = repository.create_with_ingestion(
             document_id=document_id,
             project_id=project_id,
             role=role.value,

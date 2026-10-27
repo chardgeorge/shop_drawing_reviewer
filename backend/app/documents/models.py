@@ -5,6 +5,14 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict
 
 
+class ExtractionSummary(BaseModel):
+    status: str
+    page_count: int | None
+    diagnostics: dict[str, object]
+    error_code: str | None
+    error_message: str | None
+
+
 class DocumentRole(StrEnum):
     ENGINEER = "engineer"
     SHOP = "shop"
@@ -42,6 +50,7 @@ class DocumentResponse(BaseModel):
     status: DocumentStatus
     uploaded_by: str
     uploaded_at: datetime
+    extraction: ExtractionSummary | None = None
 
 
 class DocumentListResponse(BaseModel):

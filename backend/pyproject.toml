@@ -9,6 +9,7 @@ description = "Local API for the Shop Drawing Reviewer prototype"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115,<1",
+    "PyMuPDF>=1.25,<2",
     "python-multipart>=0.0.20,<1",
     "psycopg[binary]>=3.2,<4",
     "uvicorn[standard]>=0.34,<1",

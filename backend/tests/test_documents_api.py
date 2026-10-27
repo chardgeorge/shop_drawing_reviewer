@@ -39,6 +39,18 @@ class MemoryDocumentRepository:
         self.documents.append(document)
         return document
 
+    def create_with_ingestion(self, **fields: object) -> dict[str, object]:
+        document = self.create(**fields)
+        document["status"] = "queued"
+        document["extraction"] = {
+            "status": "queued",
+            "page_count": None,
+            "diagnostics": {},
+            "error_code": None,
+            "error_message": None,
+        }
+        return document
+
     def list_for_project(
         self,
         project_id: UUID,
@@ -103,7 +115,8 @@ def test_upload_stores_immutable_pdf_and_lists_metadata(
     ).json()["id"] == first_document["id"]
     assert first_document["file_name"] == "schedule.pdf"
     assert first_document["revision"] == "A"
-    assert first_document["status"] == "uploaded"
+    assert first_document["status"] == "queued"
+    assert first_document["extraction"]["status"] == "queued"
     assert first_document["file_size_bytes"] == len(PDF_BYTES)
     assert first_document["sha256"] == hashlib.sha256(PDF_BYTES).hexdigest()
 

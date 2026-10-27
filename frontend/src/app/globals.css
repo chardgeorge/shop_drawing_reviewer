@@ -1426,102 +1426,6 @@ h1 {
   background: #355d48;
 }
 
-.marked-pdf-pending {
-  color: #788694;
-  font-size: 10px;
-}
-
-.beam-marking-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 18px;
-  padding: 14px;
-  border: 1px solid #dce5eb;
-  border-radius: 6px;
-  background: #f7fafc;
-}
-
-.beam-marking-toolbar strong {
-  color: #33495b;
-  font-size: 11px;
-}
-
-.beam-marking-toolbar p {
-  max-width: 700px;
-  margin: 4px 0 0;
-  color: #687986;
-  font-size: 10px;
-  line-height: 1.55;
-}
-
-.beam-marking-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-}
-
-.beam-marking-button,
-.beam-clear-button,
-.beam-line-list button {
-  min-height: 32px;
-  padding: 0 11px;
-  border: 1px solid #cbd6dd;
-  border-radius: 5px;
-  color: #3e5668;
-  background: #fff;
-  font: inherit;
-  font-size: 10px;
-  font-weight: 620;
-  cursor: pointer;
-}
-
-.beam-marking-button.is-active {
-  border-color: #14529a;
-  color: #fff;
-  background: #14529a;
-}
-
-.beam-clear-button,
-.beam-line-list button {
-  color: #785a4c;
-}
-
-.beam-marking-hint {
-  margin: 8px 0 0;
-  color: #14529a;
-  font-size: 10px;
-}
-
-.beam-line-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  margin: 10px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.beam-line-list li {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 5px 4px 9px;
-  border: 1px solid #d7e1e9;
-  border-radius: 5px;
-  color: #33495b;
-  background: #f7fafc;
-  font-size: 10px;
-}
-
-.beam-line-list button {
-  min-height: 24px;
-  padding: 0 7px;
-  font-size: 9px;
-}
-
 .comparison-caveat {
   margin: 14px 0 0;
   color: #806b45;
@@ -1580,12 +1484,6 @@ h1 {
   pointer-events: none;
 }
 
-.difference-overlay.beam-marking-active {
-  pointer-events: auto;
-  cursor: crosshair;
-  touch-action: none;
-}
-
 @media (max-width: 760px) {
   .visual-comparison-controls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1596,11 +1494,6 @@ h1 {
   }
 
   .comparison-result-heading {
-    flex-direction: column;
-  }
-
-  .beam-marking-toolbar {
-    align-items: flex-start;
     flex-direction: column;
   }
 

@@ -10,13 +10,6 @@ export type DifferenceRegion = {
   changedPixels: number;
 };
 
-export type BeamLine = {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-};
-
 export type RegistrationSummary = {
   inliers: number;
   matchedFeatures: number;

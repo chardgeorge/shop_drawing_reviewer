@@ -162,6 +162,7 @@ function ReviewWorkspace({
   const [savingRowId, setSavingRowId] = useState("");
   const [engineerRows, setEngineerRows] = useState<BeamRow[]>([]);
   const [shopRows, setShopRows] = useState<BeamRow[]>([]);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   const selectedDocument = documents.find((document) => document.id === selectedDocumentId);
   const extractionId = selectedDocument?.extraction?.id;
@@ -369,6 +370,7 @@ function ReviewWorkspace({
       <VisualComparison
         engineeringFiles={sourceFiles.engineering}
         shopFiles={sourceFiles.shop}
+        onCompareStart={() => setIsSidebarOpen(false)}
       />
       {error && <p className="notice-message" role="alert">{error}</p>}
       {selectedDocument?.status === "queued" || selectedDocument?.status === "processing" ? (
@@ -607,6 +609,7 @@ export default function UploadWorkspace() {
   const [reviewProjectId, setReviewProjectId] = useState("");
   const [uploadedDocuments, setUploadedDocuments] = useState<ExtractedDocument[]>([]);
   const [demoMode, setDemoMode] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const engineeringInput = useRef<HTMLInputElement>(null);
   const shopInput = useRef<HTMLInputElement>(null);
 
@@ -620,6 +623,23 @@ export default function UploadWorkspace() {
       ),
     [files],
   );
+  const uploadPreviewUrls = useMemo(
+    () => ({
+      engineering: files.engineering[0]
+        ? URL.createObjectURL(files.engineering[0].file)
+        : "",
+      shop: files.shop[0] ? URL.createObjectURL(files.shop[0].file) : "",
+    }),
+    [files],
+  );
+
+  useEffect(() => {
+    return () => {
+      Object.values(uploadPreviewUrls).forEach((url) => {
+        if (url) URL.revokeObjectURL(url);
+      });
+    };
+  }, [uploadPreviewUrls]);
 
   function openDemoReview() {
     setDemoMode(true);
@@ -788,19 +808,38 @@ export default function UploadWorkspace() {
           }}
           onDrop={(event) => handleDrop(side, event)}
         >
-          <div className="upload-symbol">
-            <Icon name="upload" size={23} />
-          </div>
-          <p className="drop-title">Drop PDF files here</p>
-          <p className="drop-or">or</p>
-          <button
-            className="browse-button"
-            type="button"
-            onClick={() => getInput(side).current?.click()}
-          >
-            Browse files
-          </button>
-          <span className="file-hint">PDF only · Multiple files supported</span>
+          {selected.length > 0 && uploadPreviewUrls[side] ? (
+            <>
+              <iframe
+                className="upload-preview"
+                src={`${uploadPreviewUrls[side]}#page=1&view=FitH`}
+                title={`${copy.title} first-page preview`}
+              />
+              <button
+                className="browse-button preview-browse-button"
+                type="button"
+                onClick={() => getInput(side).current?.click()}
+              >
+                Add more files
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="upload-symbol">
+                <Icon name="upload" size={23} />
+              </div>
+              <p className="drop-title">Drop PDF files here</p>
+              <p className="drop-or">or</p>
+              <button
+                className="browse-button"
+                type="button"
+                onClick={() => getInput(side).current?.click()}
+              >
+                Browse files
+              </button>
+              <span className="file-hint">PDF only · Multiple files supported</span>
+            </>
+          )}
         </div>
 
         {selected.length > 0 && (
@@ -842,11 +881,13 @@ export default function UploadWorkspace() {
   if (reviewProjectId) {
     return (
       <div className="app-shell">
-        <aside className="sidebar">
-          <a className="brand" href="#" aria-label="Shop Drawing Reviewer home">
-            <span className="brand-mark"><Icon name="logo" size={22} /></span>
-            <span className="brand-copy"><strong>shopcheck</strong><span>STRUCTURAL REVIEW</span></span>
-          </a>
+        <aside id="review-navigation" className={`sidebar ${isSidebarOpen ? "" : "sidebar-collapsed"}`}>
+          <div className="brand">
+            <button className="sidebar-toggle" type="button" aria-label="Collapse menu" aria-expanded={isSidebarOpen} aria-controls="review-navigation" onClick={() => setIsSidebarOpen(false)}>
+              <Icon name="grid" size={20} />
+            </button>
+            <span className="brand-copy"><strong>shopChecker</strong><span>STRUCTURAL REVIEW</span></span>
+          </div>
           <div className="workspace-label">WORKSPACE</div>
           <nav className="sidebar-nav" aria-label="Main navigation">
             <a className="nav-item active" href="#review"><Icon name="grid" /><span>New review</span></a>
@@ -857,7 +898,12 @@ export default function UploadWorkspace() {
           </div>
         </aside>
         <main className="main-content" id="review">
-          <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span className="breadcrumb-divider">/</span><strong>Extraction review</strong></div><div className="topbar-status"><span className="status-dot" />Local review</div></header>
+          {!isSidebarOpen && (
+            <button className="menu-toggle" type="button" aria-expanded={isSidebarOpen} aria-controls="review-navigation" onClick={() => setIsSidebarOpen(true)}>
+              <Icon name="grid" size={17} />
+              <span>Show menu</span>
+            </button>
+          )}
           <div className="content-wrap">
             <ReviewWorkspace
               projectId={reviewProjectId}
@@ -876,16 +922,16 @@ export default function UploadWorkspace() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <a className="brand" href="#" aria-label="Shop Drawing Reviewer home">
-          <span className="brand-mark">
-            <Icon name="logo" size={22} />
-          </span>
+      <aside id="upload-navigation" className={`sidebar ${isSidebarOpen ? "" : "sidebar-collapsed"}`}>
+        <div className="brand">
+          <button className="sidebar-toggle" type="button" aria-label="Collapse menu" aria-expanded={isSidebarOpen} aria-controls="upload-navigation" onClick={() => setIsSidebarOpen(false)}>
+            <Icon name="grid" size={20} />
+          </button>
           <span className="brand-copy">
-            <strong>shopcheck</strong>
+            <strong>shopChecker</strong>
             <span>STRUCTURAL REVIEW</span>
           </span>
-        </a>
+        </div>
 
         <div className="workspace-label">WORKSPACE</div>
         <nav className="sidebar-nav" aria-label="Main navigation">
@@ -936,17 +982,12 @@ export default function UploadWorkspace() {
       </aside>
 
       <main className="main-content" id="upload">
-        <header className="topbar">
-          <div className="breadcrumb">
-            <span>Workspace</span>
-            <span className="breadcrumb-divider">/</span>
-            <strong>New review</strong>
-          </div>
-          <div className="topbar-status">
-            <span className="status-dot" />
-            MVP preview
-          </div>
-        </header>
+        {!isSidebarOpen && (
+          <button className="menu-toggle" type="button" aria-expanded={isSidebarOpen} aria-controls="upload-navigation" onClick={() => setIsSidebarOpen(true)}>
+            <Icon name="grid" size={17} />
+            <span>Show menu</span>
+          </button>
+        )}
 
         <div className="content-wrap">
           <div className="page-intro">

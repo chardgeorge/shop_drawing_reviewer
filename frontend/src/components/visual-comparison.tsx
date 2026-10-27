@@ -19,9 +19,11 @@ type ComparisonDisplay = Omit<PdfComparison, "markedPdf"> & {
 export default function VisualComparison({
   engineeringFiles,
   shopFiles,
+  onCompareStart,
 }: {
   engineeringFiles: CompareDrawing[];
   shopFiles: CompareDrawing[];
+  onCompareStart?: () => void;
 }) {
   const [engineerId, setEngineerId] = useState("");
   const [shopId, setShopId] = useState("");
@@ -91,6 +93,7 @@ export default function VisualComparison({
 
   async function runComparison() {
     if (!engineerFile || !shopFile) return;
+    onCompareStart?.();
     setIsComparing(true);
     setNotice("");
     setComparison(null);

@@ -1058,15 +1058,6 @@ export default function UploadWorkspace() {
                   : "PDFs upload only to the local backend."}
               </span>
             </div>
-            <button
-              className="continue-button"
-              type="button"
-              disabled={!isReady || isUploading}
-              onClick={beginReview}
-            >
-              {isUploading ? "Uploading…" : "Continue"}
-              <Icon name="arrow" size={18} />
-            </button>
             <button className="demo-button" type="button" onClick={openDemoReview}>
               Open demo data
             </button>

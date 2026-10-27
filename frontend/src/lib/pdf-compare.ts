@@ -746,6 +746,7 @@ async function createMarkedPdf(
   const drawing = await pdf.embedPng(alignedShopCanvas.toDataURL("image/png"));
   const font = await pdf.embedFont(StandardFonts.HelveticaBold);
   const red = rgb(0.82, 0.12, 0.12);
+  const muted = rgb(0.32, 0.39, 0.44);
 
   page.drawImage(drawing, {
     x: 0,
@@ -769,10 +770,33 @@ async function createMarkedPdf(
       width: Math.min(pageWidth - rectangleX, x + width + inset - rectangleX),
       height: Math.min(pageHeight - rectangleY, y + height + inset - rectangleY),
       color: red,
-      opacity: 0.16,
+      opacity: 0.08,
       borderColor: red,
-      borderWidth: 1.5,
+      borderWidth: 0.8,
     });
+
+    const cloudRadius = 4;
+    const cloudSpacing = 18;
+    const cloudPoints: Array<{ x: number; y: number }> = [];
+    for (let cloudX = rectangleX; cloudX <= rectangleX + width; cloudX += cloudSpacing) {
+      cloudPoints.push({ x: cloudX, y: rectangleY });
+      cloudPoints.push({ x: cloudX, y: rectangleY + height });
+    }
+    for (let cloudY = rectangleY; cloudY <= rectangleY + height; cloudY += cloudSpacing) {
+      cloudPoints.push({ x: rectangleX, y: cloudY });
+      cloudPoints.push({ x: rectangleX + width, y: cloudY });
+    }
+    cloudPoints.forEach((point) => {
+      page.drawEllipse({
+        x: Math.max(cloudRadius, Math.min(pageWidth - cloudRadius, point.x)),
+        y: Math.max(cloudRadius, Math.min(pageHeight - cloudRadius, point.y)),
+        xScale: cloudRadius,
+        yScale: cloudRadius,
+        borderColor: red,
+        borderWidth: 1.2,
+      });
+    });
+
     page.drawText(`DIFF ${region.id}`, {
       x: Math.max(0, x),
       y: Math.min(pageHeight - 10, y + height + 3),
@@ -791,6 +815,70 @@ async function createMarkedPdf(
       color: red,
     });
   }
+
+  const summaryPage = pdf.addPage([pageWidth, pageHeight]);
+  summaryPage.drawText("VISUAL REVIEW FINDINGS", {
+    x: 28,
+    y: pageHeight - 36,
+    size: 15,
+    font,
+    color: muted,
+  });
+  summaryPage.drawText(
+    "Visual candidates for EOR review — not engineering conclusions.",
+    {
+      x: 28,
+      y: pageHeight - 56,
+      size: 9,
+      color: muted,
+    },
+  );
+  summaryPage.drawText(
+    `${regions.length} candidate region${regions.length === 1 ? "" : "s"} detected on the selected page.`,
+    {
+      x: 28,
+      y: pageHeight - 78,
+      size: 10,
+      font,
+      color: muted,
+    },
+  );
+
+  if (regions.length === 0) {
+    summaryPage.drawText(
+      "No visual candidates exceeded the comparison threshold.",
+      { x: 28, y: pageHeight - 112, size: 10, color: muted },
+    );
+  } else {
+    regions.forEach((region, index) => {
+      const y = pageHeight - 112 - index * 24;
+      if (y < 36) return;
+      summaryPage.drawText(`DIFF ${region.id}`, {
+        x: 28,
+        y,
+        size: 10,
+        font,
+        color: red,
+      });
+      summaryPage.drawText(
+        `Visual candidate at x ${Math.round(region.x)}, y ${Math.round(region.y)} ` +
+          `(${Math.round(region.width)} × ${Math.round(region.height)} px); ` +
+          `${region.changedPixels} changed pixels.`,
+        { x: 82, y, size: 8, color: muted },
+      );
+    });
+  }
+
+  summaryPage.drawText(
+    "Verify each cloud against both source sheets at higher resolution. " +
+      "Unreadable or ambiguous conditions should be recorded as verify findings.",
+    {
+      x: 28,
+      y: 24,
+      size: 8,
+      color: muted,
+    },
+  );
 
   return pdf.save();
 }

@@ -42,8 +42,8 @@ export default function VisualComparison({
   const [shopId, setShopId] = useState("");
   const [engineerPage, setEngineerPage] = useState(1);
   const [shopPage, setShopPage] = useState(1);
-  const [engineerScale, setEngineerScale] = useState("");
-  const [shopScale, setShopScale] = useState("");
+  const [engineerScale, setEngineerScale] = useState("100");
+  const [shopScale, setShopScale] = useState("100");
   const [engineerPageCount, setEngineerPageCount] = useState(0);
   const [shopPageCount, setShopPageCount] = useState(0);
   const [isComparing, setIsComparing] = useState(false);
@@ -171,7 +171,7 @@ export default function VisualComparison({
             value={engineerId}
             onChange={(event) => {
               setEngineerId(event.target.value);
-              setEngineerScale("");
+              setEngineerScale("100");
               setComparison(null);
               setNotice("");
             }}
@@ -187,7 +187,7 @@ export default function VisualComparison({
             value={engineerPage}
             onChange={(event) => {
               setEngineerPage(Number(event.target.value));
-              setEngineerScale("");
+              setEngineerScale("100");
               setComparison(null);
             }}
             disabled={!engineerPageCount}
@@ -226,7 +226,7 @@ export default function VisualComparison({
             value={shopId}
             onChange={(event) => {
               setShopId(event.target.value);
-              setShopScale("");
+              setShopScale("100");
               setComparison(null);
               setNotice("");
             }}
@@ -242,7 +242,7 @@ export default function VisualComparison({
             value={shopPage}
             onChange={(event) => {
               setShopPage(Number(event.target.value));
-              setShopScale("");
+              setShopScale("100");
               setComparison(null);
             }}
             disabled={!shopPageCount}

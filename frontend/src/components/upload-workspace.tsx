@@ -46,88 +46,7 @@ type BeamRow = {
   review_state: "needs_review" | "accepted" | "rejected";
 };
 
-function createDemoRows(): BeamRow[] {
-  return [
-    {
-      id: "demo-row-1",
-      member_mark_raw: "B1",
-      section_raw: "W12x26",
-      member_mark: "B1",
-      section: "W12x26",
-      page_number: 1,
-      source_bbox: { x0: 72, y0: 118, x1: 290, y1: 134 },
-      confidence: 0.96,
-      review_state: "needs_review",
-    },
-    {
-      id: "demo-row-2",
-      member_mark_raw: "B2",
-      section_raw: "W14x30",
-      member_mark: "B2",
-      section: "W14x30",
-      page_number: 1,
-      source_bbox: { x0: 72, y0: 148, x1: 290, y1: 164 },
-      confidence: 0.91,
-      review_state: "needs_review",
-    },
-    {
-      id: "demo-row-3",
-      member_mark_raw: "B3",
-      section_raw: "W16x36",
-      member_mark: "B3",
-      section: "W16x36",
-      page_number: 1,
-      source_bbox: { x0: 72, y0: 178, x1: 290, y1: 194 },
-      confidence: 0.84,
-      review_state: "needs_review",
-    },
-  ];
-}
-
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-const DEMO_PROJECT_ID = "demo-project";
-
-function createDemoDocuments(): ExtractedDocument[] {
-  return [
-    {
-      id: "demo-engineer-document",
-      role: "engineer",
-      file_name: "engineer-beam-schedule.pdf",
-      status: "ready",
-      extraction: {
-        id: "demo-engineer-extraction",
-        status: "completed",
-        page_count: 2,
-        diagnostics: { schedule_row_count: 3 },
-        error_code: null,
-        error_message: null,
-      },
-    },
-    {
-      id: "demo-shop-document",
-      role: "shop",
-      file_name: "shop-drawing-schedule.pdf",
-      status: "needs_review",
-      extraction: {
-        id: "demo-shop-extraction",
-        status: "completed",
-        page_count: 1,
-        diagnostics: {
-          schedule_row_count: 3,
-          warnings: [
-            {
-              code: "DEMO_REVIEW",
-              message: "Demo data only: review the extracted values before comparison.",
-            },
-          ],
-        },
-        error_code: null,
-        error_message: null,
-      },
-    },
-  ];
-}
-
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, init);
   if (!response.ok) {
@@ -145,17 +64,15 @@ function ReviewWorkspace({
   sourceFiles,
   onDocumentsChange,
   onBack,
-  demoMode = false,
 }: {
   projectId: string;
   documents: ExtractedDocument[];
   sourceFiles: Record<DrawingSide, DrawingFile[]>;
   onDocumentsChange: Dispatch<SetStateAction<ExtractedDocument[]>>;
   onBack: () => void;
-  demoMode?: boolean;
 }) {
   const [selectedDocumentId, setSelectedDocumentId] = useState(documents[0]?.id ?? "");
-  const [rows, setRows] = useState<BeamRow[]>(() => (demoMode ? createDemoRows() : []));
+  const [rows, setRows] = useState<BeamRow[]>([]);
   const [drafts, setDrafts] = useState<Record<string, { member_mark: string; section: string }>>({});
   const [selectedPage, setSelectedPage] = useState(1);
   const [error, setError] = useState("");
@@ -168,26 +85,6 @@ function ReviewWorkspace({
   const extractionId = selectedDocument?.extraction?.id;
   const engineerDocument = documents.find((document) => document.role === "engineer");
   const shopDocument = documents.find((document) => document.role === "shop");
-
-  const previewUrls = useMemo(() => {
-    if (!demoMode) return {};
-    return {
-      engineer: sourceFiles.engineering[0]
-        ? URL.createObjectURL(sourceFiles.engineering[0].file)
-        : "",
-      shop: sourceFiles.shop[0]
-        ? URL.createObjectURL(sourceFiles.shop[0].file)
-        : "",
-    };
-  }, [demoMode, sourceFiles]);
-
-  useEffect(() => {
-    return () => {
-      Object.values(previewUrls).forEach((url) => {
-        if (url) URL.revokeObjectURL(url);
-      });
-    };
-  }, [previewUrls]);
 
   useEffect(() => {
     let active = true;
@@ -203,7 +100,7 @@ function ReviewWorkspace({
         if (active) setError((requestError as Error).message);
       }
     };
-    const pending = !demoMode && documents.some(
+    const pending = documents.some(
       (document) => document.status === "queued" || document.status === "processing",
     );
     if (!pending) return;
@@ -216,10 +113,6 @@ function ReviewWorkspace({
 
   useEffect(() => {
     let active = true;
-    if (demoMode) {
-      setRows(createDemoRows());
-      return;
-    }
     setRows([]);
     if (!selectedDocument || !extractionId || selectedDocument.extraction?.status !== "completed") {
       return;
@@ -245,19 +138,6 @@ function ReviewWorkspace({
 
   useEffect(() => {
     let active = true;
-    if (demoMode) {
-      const demoRows = createDemoRows();
-      setEngineerRows(demoRows);
-      setShopRows(
-        demoRows.map((row, index) =>
-          index === 1
-            ? { ...row, id: "demo-shop-row-2", section: "W16x36", section_raw: "W16x36" }
-            : { ...row, id: `demo-shop-${index + 1}` },
-        ),
-      );
-      return;
-    }
-
     const loadRows = async (
       document: ExtractedDocument | undefined,
       setDocumentRows: (rows: BeamRow[]) => void,
@@ -282,7 +162,7 @@ function ReviewWorkspace({
     return () => {
       active = false;
     };
-  }, [demoMode, engineerDocument, shopDocument]);
+  }, [engineerDocument, shopDocument]);
 
   async function updateRow(
     row: BeamRow,
@@ -291,22 +171,6 @@ function ReviewWorkspace({
     setSavingRowId(row.id);
     setError("");
     try {
-      if (demoMode) {
-        const applyUpdate = (items: BeamRow[]) =>
-          items.map((item) =>
-            item.id === row.id
-              ? {
-                  ...item,
-                  ...update,
-                  member_mark: update.member_mark ?? item.member_mark,
-                  section: update.section ?? item.section,
-                }
-              : item,
-          );
-        setRows(applyUpdate);
-        setShopRows(applyUpdate);
-        return;
-      }
       const updated = await requestJson<BeamRow>(`/api/v1/beam-rows/${row.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -350,7 +214,6 @@ function ReviewWorkspace({
           <p className="intro-copy">Check each extracted value against its source PDF before using it.</p>
         </div>
         <div className="review-heading-actions">
-          {demoMode && <span className="demo-badge">DEMO DATA</span>}
           <button className="browse-button" type="button" onClick={onBack}>Back to documents</button>
         </div>
       </div>
@@ -387,7 +250,6 @@ function ReviewWorkspace({
           <div className="comparison-pdf-grid">
             {(["engineer", "shop"] as const).map((role) => {
               const document = role === "engineer" ? engineerDocument : shopDocument;
-              const fileUrl = previewUrls[role];
               const backendUrl = document
                 ? `${API_BASE_URL}/api/v1/documents/${document.id}/file#page=${viewerPage}`
                 : "";
@@ -398,25 +260,7 @@ function ReviewWorkspace({
                     <strong>{isShop ? "Shop drawing PDF" : "Engineer PDF"}</strong>
                     <span>{document?.file_name ?? "No document"}</span>
                   </div>
-                  {demoMode && fileUrl ? (
-                    <iframe title={`${role} PDF preview`} src={`${fileUrl}#page=${viewerPage}`} />
-                  ) : demoMode ? (
-                    <div className="demo-pdf">
-                      <div className="demo-pdf-page">
-                        <strong>{isShop ? "Shop drawing schedule" : "Engineer beam schedule"}</strong>
-                        <span>Page {viewerPage}</span>
-                        <div className="demo-pdf-lines" aria-hidden="true">
-                          <span />
-                          <span />
-                          <span />
-                          <span />
-                        </div>
-                        <p>{isShop ? "Discrepancies are highlighted below." : "Reference design values."}</p>
-                      </div>
-                    </div>
-                  ) : (
-                    <iframe title={`${role} PDF: ${document?.file_name ?? role}`} src={backendUrl} />
-                  )}
+                  <iframe title={`${role} PDF: ${document?.file_name ?? role}`} src={backendUrl} />
                   {isShop && shopRows.length > 0 && (
                     <div className="pdf-discrepancy-ribbon">Discrepancies highlighted below</div>
                   )}
@@ -604,17 +448,13 @@ export default function UploadWorkspace() {
   });
   const [dragging, setDragging] = useState<DrawingSide | null>(null);
   const [notice, setNotice] = useState("");
-  const [projectName, setProjectName] = useState("");
-  const [isUploading, setIsUploading] = useState(false);
   const [reviewProjectId, setReviewProjectId] = useState("");
   const [uploadedDocuments, setUploadedDocuments] = useState<ExtractedDocument[]>([]);
-  const [demoMode, setDemoMode] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const engineeringInput = useRef<HTMLInputElement>(null);
   const shopInput = useRef<HTMLInputElement>(null);
 
   const totalFiles = files.engineering.length + files.shop.length;
-  const isReady = files.engineering.length > 0 && files.shop.length > 0;
   const totalSize = useMemo(
     () =>
       [...files.engineering, ...files.shop].reduce(
@@ -640,64 +480,6 @@ export default function UploadWorkspace() {
       });
     };
   }, [uploadPreviewUrls]);
-
-  function openDemoReview() {
-    setDemoMode(true);
-    setReviewProjectId(DEMO_PROJECT_ID);
-    setUploadedDocuments(createDemoDocuments());
-    setNotice("");
-  }
-
-  async function beginReview() {
-    setIsUploading(true);
-    setNotice("");
-    try {
-      const project = await requestJson<{ id: string }>("/api/v1/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: projectName.trim() || `Local drawing review ${new Date().toLocaleDateString()}`,
-        }),
-      });
-
-      const uploaded: ExtractedDocument[] = [];
-      for (const [side, role] of [
-        ["engineering", "engineer"],
-        ["shop", "shop"],
-      ] as const) {
-        for (const item of files[side]) {
-          const form = new FormData();
-          form.append("role", role);
-          form.append("file", item.file);
-          form.append(
-            "document_type",
-            role === "engineer" ? "general_arrangement" : "shop_drawing",
-          );
-          uploaded.push(
-            await requestJson<ExtractedDocument>(
-              `/api/v1/projects/${project.id}/documents`,
-              { method: "POST", body: form },
-            ),
-          );
-        }
-      }
-
-      setReviewProjectId(project.id);
-      setUploadedDocuments(uploaded);
-    } catch (requestError) {
-      const message = (requestError as Error).message;
-      if (message.includes("Failed to fetch")) {
-        openDemoReview();
-        setNotice(
-          "Backend is not running, so the prototype opened a clearly labeled demo review with sample extracted rows.",
-        );
-      } else {
-        setNotice(message);
-      }
-    } finally {
-      setIsUploading(false);
-    }
-  }
 
   function addFiles(side: DrawingSide, selected: FileList | File[]) {
     const accepted: DrawingFile[] = [];
@@ -899,9 +681,8 @@ export default function UploadWorkspace() {
         </aside>
         <main className="main-content" id="review">
           {!isSidebarOpen && (
-            <button className="menu-toggle" type="button" aria-expanded={isSidebarOpen} aria-controls="review-navigation" onClick={() => setIsSidebarOpen(true)}>
+            <button className="menu-toggle" type="button" aria-label="Show menu" title="Show menu" aria-expanded={isSidebarOpen} aria-controls="review-navigation" onClick={() => setIsSidebarOpen(true)}>
               <Icon name="grid" size={17} />
-              <span>Show menu</span>
             </button>
           )}
           <div className="content-wrap">
@@ -911,7 +692,6 @@ export default function UploadWorkspace() {
               sourceFiles={files}
               onDocumentsChange={setUploadedDocuments}
               onBack={() => setReviewProjectId("")}
-              demoMode={demoMode}
             />
             <div className="prototype-note"><span className="prototype-indicator" /><span>PDFs are stored on this machine and are not sent to external AI services.</span></div>
           </div>
@@ -983,9 +763,8 @@ export default function UploadWorkspace() {
 
       <main className="main-content" id="upload">
         {!isSidebarOpen && (
-          <button className="menu-toggle" type="button" aria-expanded={isSidebarOpen} aria-controls="upload-navigation" onClick={() => setIsSidebarOpen(true)}>
+          <button className="menu-toggle" type="button" aria-label="Show menu" title="Show menu" aria-expanded={isSidebarOpen} aria-controls="upload-navigation" onClick={() => setIsSidebarOpen(true)}>
             <Icon name="grid" size={17} />
-            <span>Show menu</span>
           </button>
         )}
 
@@ -1009,24 +788,6 @@ export default function UploadWorkspace() {
               <span className="step-muted">02 REVIEW</span>
             </div>
           </div>
-
-          <section className="project-field" aria-labelledby="project-label">
-            <label id="project-label" htmlFor="project-name">
-              PROJECT NAME <span className="optional-label">OPTIONAL</span>
-            </label>
-            <div className="project-input-wrap">
-              <Icon name="folder" size={19} />
-              <input
-                id="project-name"
-                type="text"
-                placeholder="e.g. North Plant — Structural Steel"
-                maxLength={120}
-                value={projectName}
-                onChange={(event) => setProjectName(event.target.value)}
-              />
-              <span className="project-input-hint">A name helps you find this review later</span>
-            </div>
-          </section>
 
           <div className="upload-grid">
             {renderPanel("engineering")}
@@ -1058,9 +819,6 @@ export default function UploadWorkspace() {
                   : "PDFs upload only to the local backend."}
               </span>
             </div>
-            <button className="demo-button" type="button" onClick={openDemoReview}>
-              Open demo data
-            </button>
           </div>
 
           <div className="prototype-note">

@@ -1,12 +1,18 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent, ReactNode } from "react";
+import { comparePdfFirstPages } from "@/lib/pdf-compare";
+import type { PdfComparison } from "@/lib/pdf-compare";
 
 type DrawingSide = "engineering" | "shop";
 type DrawingFile = {
   id: string;
   file: File;
+};
+
+type ComparisonDisplay = Omit<PdfComparison, "markedPdf"> & {
+  markedPdfUrl: string;
 };
 
 const SIDE_COPY: Record<
@@ -144,6 +150,8 @@ export default function UploadWorkspace() {
   });
   const [dragging, setDragging] = useState<DrawingSide | null>(null);
   const [notice, setNotice] = useState("");
+  const [comparison, setComparison] = useState<ComparisonDisplay | null>(null);
+  const [isComparing, setIsComparing] = useState(false);
   const engineeringInput = useRef<HTMLInputElement>(null);
   const shopInput = useRef<HTMLInputElement>(null);
 
@@ -157,6 +165,11 @@ export default function UploadWorkspace() {
       ),
     [files],
   );
+
+  useEffect(() => {
+    if (!comparison) return;
+    return () => URL.revokeObjectURL(comparison.markedPdfUrl);
+  }, [comparison]);
 
   function addFiles(side: DrawingSide, selected: FileList | File[]) {
     const accepted: DrawingFile[] = [];
@@ -183,6 +196,7 @@ export default function UploadWorkspace() {
     }
 
     if (accepted.length > 0) {
+      setComparison(null);
       setFiles((current) => ({
         ...current,
         [side]: [
@@ -207,10 +221,41 @@ export default function UploadWorkspace() {
   }
 
   function removeFile(side: DrawingSide, id: string) {
+    setComparison(null);
     setFiles((current) => ({
       ...current,
       [side]: current[side].filter((item) => item.id !== id),
     }));
+  }
+
+  async function compareDrawings() {
+    const engineerFile = files.engineering[0]?.file;
+    const shopFile = files.shop[0]?.file;
+    if (!engineerFile || !shopFile) return;
+
+    setIsComparing(true);
+    setNotice("");
+    setComparison(null);
+    try {
+      const result = await comparePdfFirstPages(engineerFile, shopFile);
+      const pdfBuffer = new ArrayBuffer(result.markedPdf.byteLength);
+      new Uint8Array(pdfBuffer).set(result.markedPdf);
+      const markedPdfUrl = URL.createObjectURL(
+        new Blob([pdfBuffer], { type: "application/pdf" }),
+      );
+      setComparison({
+        ...result,
+        markedPdfUrl,
+      });
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "The PDF comparison failed unexpectedly.",
+      );
+    } finally {
+      setIsComparing(false);
+    }
   }
 
   function getInput(side: DrawingSide) {
@@ -457,22 +502,118 @@ export default function UploadWorkspace() {
             <button
               className="continue-button"
               type="button"
-              disabled={!isReady}
-              onClick={() =>
-                setNotice(
-                  "Both drawing sets are selected. Server upload and comparison will be available when the backend is connected.",
-                )
-              }
+              disabled={!isReady || isComparing}
+              onClick={compareDrawings}
             >
-              Continue
-              <Icon name="arrow" size={18} />
+              {isComparing ? "Comparing PDFs..." : "Compare first pages"}
+              {!isComparing && <Icon name="arrow" size={18} />}
             </button>
           </div>
+
+          {comparison && (
+            <section className="comparison-result" aria-labelledby="comparison-heading">
+              <div className="comparison-result-heading">
+                <div>
+                  <span className="section-kicker">
+                    <span className="kicker-line" />
+                    VISUAL REVIEW
+                  </span>
+                  <h2 id="comparison-heading">
+                    {comparison.regions.length === 0
+                      ? "No candidate changes detected"
+                      : `${comparison.regions.length} visual change region${comparison.regions.length === 1 ? "" : "s"} found`}
+                  </h2>
+                  <p>
+                    Pixel-difference candidates are highlighted on the shop drawing.
+                    Review each one; they are not engineering conclusions.
+                  </p>
+                </div>
+                <a
+                  className="marked-pdf-link"
+                  href={comparison.markedPdfUrl}
+                  download={`${files.shop[0]?.file.name.replace(/\.pdf$/i, "") ?? "shop-drawing"}-marked-up.pdf`}
+                >
+                  Download aligned markup · page 1
+                  <Icon name="arrow" size={16} />
+                </a>
+              </div>
+
+              <p className="registration-summary">
+                Auto-aligned with {comparison.registration.inliers} matching
+                features ({Math.round(comparison.registration.inlierPercent * 100)}%
+                of accepted matches), {comparison.registration.scale.toFixed(3)}×
+                scale, {comparison.registration.rotationDegrees.toFixed(1)}°
+                rotation, {comparison.registration.reprojectionError.toFixed(2)} px
+                residual.
+              </p>
+              {(comparison.engineerPageCount > 1 || comparison.shopPageCount > 1) && (
+                <p className="comparison-caveat">
+                  Only page 1 was compared. Additional pages are not analyzed or
+                  included in the exported PDF.
+                </p>
+              )}
+              <p className="comparison-caveat">
+                Automatic alignment estimates scale, rotation, and position from
+                shared visual features. Review the overlay: alignment can still be
+                wrong, and highlights can include text or revision differences or
+                miss real discrepancies. The download is a rasterized aligned view,
+                not an engineering approval or a substitute for the originals.
+              </p>
+
+              <div className="comparison-previews">
+                <figure className="comparison-preview">
+                  <figcaption>Engineer-issued · page 1</figcaption>
+                  <img
+                    src={comparison.engineerPreview}
+                    alt="Rendered first page of the engineer-issued drawing"
+                  />
+                </figure>
+                <figure className="comparison-preview">
+                  <figcaption>Shop drawing · highlighted candidates</figcaption>
+                  <div className="comparison-image-wrap">
+                    <img
+                      src={comparison.shopPreview}
+                      alt="Rendered first page of the shop drawing"
+                    />
+                    <svg
+                      className="difference-overlay"
+                      viewBox={`0 0 ${comparison.width} ${comparison.height}`}
+                      preserveAspectRatio="none"
+                      aria-hidden="true"
+                    >
+                      {comparison.regions.map((region) => (
+                        <g key={region.id}>
+                          <rect
+                            x={region.x}
+                            y={region.y}
+                            width={region.width}
+                            height={region.height}
+                            fill="rgba(220, 48, 48, 0.16)"
+                            stroke="#cf3030"
+                            strokeWidth={2}
+                          />
+                          <text
+                            x={region.x + 3}
+                            y={Math.max(14, region.y - 3)}
+                            fill="#a71f1f"
+                            fontSize={13}
+                            fontWeight="bold"
+                          >
+                            {region.id}
+                          </text>
+                        </g>
+                      ))}
+                    </svg>
+                  </div>
+                </figure>
+              </div>
+            </section>
+          )}
 
           <div className="prototype-note">
             <span className="prototype-indicator" />
             <span>
-              Preview mode — selected PDFs stay in your browser and are not uploaded.
+              Local comparison mode — selected PDFs stay in your browser and are not uploaded.
             </span>
           </div>
         </div>

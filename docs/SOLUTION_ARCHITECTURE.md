@@ -10,14 +10,14 @@ Version 1 is a document-ingestion and beam-schedule comparison product, not an a
 - PDF text extraction, beam schedule row extraction, and review of extraction results.
 - Beam identification by member mark and deterministic section comparison.
 - An issue list with finding evidence, statuses, and reviewer decisions/comments.
-- Export of findings as structured data. Marked-up PDF export is a later release.
+- Export of findings as structured data. Production-quality marked-up PDF export is a later release; the local frontend prototype can produce a rasterized first-page candidate markup.
 
 ### Explicitly out of scope for MVP
 
 - General arrangement geometry interpretation, computer vision, or inferred member connectivity.
 - Connection design checks or engineering capacity verification.
 - Automatic acceptance, approval, or issue closure.
-- Automatic PDF markup and cloud collaboration.
+- Production PDF markup and cloud collaboration. The prototype's rasterized first-page markup is not an engineering deliverable.
 
 ## 2. Recommended architecture
 

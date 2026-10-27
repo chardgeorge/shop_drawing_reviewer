@@ -8,13 +8,13 @@ Version 1 is a document-ingestion and beam-schedule comparison product, not an a
 
 - Projects and document uploads, separated into engineer-issued and fabricator/shop document sets.
 - PDF text extraction, beam schedule row extraction, and review of extraction results.
-- Beam identification by member mark and deterministic section comparison.
+- Beam identification by member mark and deterministic AISC shape designation comparison.
 - An issue list with finding evidence, statuses, and reviewer decisions/comments.
 - Export of findings as structured data. Marked-up PDF export is a later release.
 
 ### Explicitly out of scope for MVP
 
-- General arrangement geometry interpretation, computer vision, or inferred member connectivity.
+- Framing plan geometry interpretation, computer vision, or inferred member connectivity.
 - Connection design checks or engineering capacity verification.
 - Automatic acceptance, approval, or issue closure.
 - Automatic PDF markup and cloud collaboration.
@@ -119,7 +119,7 @@ AI is an optional presentation layer invoked only after a deterministic rule has
 - All findings show: rule identifier/version, compared raw and normalized values, source document/revision, page and location, and the comparison-run ID.
 - A missing counterpart is a finding only when the relevant schedules are known to be sufficiently complete. Otherwise show an extraction/completeness warning.
 - Duplicate marks, unreadable values, and uncertain parses are surfaced for resolution; they are not arbitrarily paired.
-- Section normalization is conservative and retains the exact source string. Do not equate different designations through guessed aliases.
+- Shape designation normalization is conservative and retains the exact source string. Do not equate different designations through guessed aliases.
 - AI output is labeled as a draft, generated only from a rule finding and its evidence, schema-validated, and editable. If generation fails, the deterministic finding still works.
 - Build a golden test set of synthetic or appropriately licensed PDFs. Track parser precision/recall, correct match rate, and false-positive rate; engineers approve the acceptance thresholds before release.
 - Do not describe the system as performing code compliance or structural adequacy checks.

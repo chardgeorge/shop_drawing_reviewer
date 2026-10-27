@@ -5,8 +5,8 @@
 - Keep source text, normalized values, and reviewer corrections separate.
 - Attach every extracted value to an immutable document revision and page-level evidence.
 - Treat a comparison as a reproducible run over selected extraction versions and a rule-set version.
-- Do not infer a section, match, or missing member when evidence is ambiguous.
-- Store dimensions and units explicitly when applicable. A section designation is a catalog identifier/string, not a dimension to convert.
+- Do not infer a shape designation, match, or missing member when evidence is ambiguous.
+- Store dimensions and units explicitly when applicable. An AISC shape designation (e.g. `W24x55`, `HSS6x6x3/8`) is an identifier from the AISC Shapes Database, not a dimension to convert. See [AISC member terminology](#7-aisc-member-terminology).
 
 ## 2. Core entities
 
@@ -31,8 +31,8 @@ Illustrative extracted schedule row:
   "schedule_type": "beam",
   "member_mark_raw": "B21",
   "member_mark_normalized": "B21",
-  "section_raw": "UB610x229x140",
-  "section_normalized": "UB610x229x140",
+  "section_raw": "W24x55",
+  "section_normalized": "W24x55",
   "page_number": 4,
   "source_bbox": { "x0": 72.1, "y0": 103.2, "x1": 280.0, "y1": 122.8 },
   "extractor": "pymupdf",
@@ -49,14 +49,14 @@ An accepted row uses a reviewer-approved value while retaining the original extr
 
 ```json
 {
-  "rule_code": "BEAM_SECTION_MISMATCH",
+  "rule_code": "BEAM_SHAPE_MISMATCH",
   "rule_version": "1",
   "severity": "warning",
   "status": "open",
   "member_mark": "B21",
-  "engineer_value": { "section_raw": "UB610x229x140" },
-  "shop_value": { "section_raw": "UB530x209x101" },
-  "message": "Member size differs from the engineer-issued schedule. Verify the intended substitution.",
+  "engineer_value": { "section_raw": "W24x55" },
+  "shop_value": { "section_raw": "W21x50" },
+  "message": "Member size differs from the design drawings. Verify the intended substitution.",
   "evidence": [
     { "document_id": "uuid", "page_number": 4, "schedule_row_id": "uuid" },
     { "document_id": "uuid", "page_number": 7, "schedule_row_id": "uuid" }
@@ -206,6 +206,39 @@ Production migrations should add tenant membership and a real identity-provider 
 
 1. Normalize member marks conservatively (trim whitespace and apply a documented case convention); retain the original.
 2. Group by normalized mark. If either side has zero or multiple accepted beam rows for a mark, emit an ambiguity/completeness warning and do not compare a guessed pair.
-3. Compare section strings using a versioned canonicalizer that only removes formatting variations explicitly proven equivalent by tests. Preserve both raw strings.
-4. If canonical values differ, emit `BEAM_SECTION_MISMATCH`; never translate one designation to another or conclude structural equivalence.
+3. Compare shape designations using a versioned canonicalizer that only removes formatting variations explicitly proven equivalent by tests (version 1: letter case, surrounding/internal whitespace, and `x`/`X`/`×` as the dimension separator). Preserve both raw strings.
+4. If canonical values differ, emit `BEAM_SHAPE_MISMATCH`; never translate one designation to another or conclude structural equivalence.
 5. A missing-member rule is enabled only after extraction completeness and document selection are visible to the reviewer. Report “not found in selected schedule,” not “missing from design.”
+
+## 7. AISC member terminology
+
+Terms follow the AISC *Steel Construction Manual* and AISC 303 *Code of Standard Practice*. Use them in code, UI copy, rule messages, and test fixtures.
+
+| Term | Meaning in this product |
+|---|---|
+| Design drawings | Engineer of record's (EOR) structural drawings; `role = 'engineer'`. Includes framing plans, sections, connection details, and schedules. |
+| Shop drawings | Fabricator's piece drawings, submitted for EOR review; `role = 'shop'`. |
+| Erection drawings | Fabricator's placement/framing drawings showing piece marks on plan. Not yet a separate `document_type`. |
+| Framing plan | Plan view on the design drawings showing grids, member sizes, and member locations. The `general_arrangement` document type covers framing plans; the value is kept for compatibility with existing code and data. |
+| Shape designation | The AISC identifier for a member size, e.g. `W24x55`. Replaces "section" for member sizes. Stored in the `section_raw` / `section_normalized` columns (names kept for compatibility with existing code and data). |
+| Piece mark | Fabricator's identifying mark for an individual shipping piece (e.g. `B12`, `C3`). |
+| Member mark | Any mark used to pair members between drawing sets; on design drawings this may be a beam/column mark or a grid-location reference. |
+
+AISC shape designations recognized by the product (examples only; validation against the AISC Shapes Database is a later feature):
+
+| Type | Example designations |
+|---|---|
+| W, M, S, HP | `W24x55`, `M12x11.8`, `S12x31.8`, `HP12x53` |
+| C, MC | `C12x20.7`, `MC8x22.8` |
+| WT, MT, ST | `WT9x27.5`, `ST6x17.5` |
+| L, 2L | `L4x4x1/2`, `L6x4x3/8`, `2L4x4x1/2` (spacing and LLBB/SLBB orientation recorded separately) |
+| HSS (rectangular/square) | `HSS8x4x1/2`, `HSS6x6x3/8` |
+| HSS (round), Pipe | `HSS6.625x0.280`, `Pipe6STD`, `Pipe4XS` |
+| Plate, bar | `PL1/2x8`, `PL3/4` (thickness and width are dimensions, not catalog shapes) |
+
+Rules for designations:
+
+- The canonicalizer may only remove the formatting differences listed in [section 6](#6-matching-and-normalization). It must not turn fractions into decimals (`3/8` vs `0.375`), convert weights, or expand nominal sizes. Such cases are reported as unsupported notation for engineer review.
+- Different nominal depths or weights are always different designations (`W24x55` ≠ `W24x62`), even within the same depth group.
+- A designation from an older edition (e.g. a superseded HSS or W size) is kept as written; compatibility with current AISC tables is not inferred.
+- On US design drawings, beams are often identified by framing-plan location rather than a mark, while shop and erection drawings use piece marks. Matching by mark alone assumes the design drawings carry marks or a schedule; pairing by grid location is a separate, later capability.

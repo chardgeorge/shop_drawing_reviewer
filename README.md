@@ -59,7 +59,7 @@ The frontend currently provides a runnable local UI preview with an experimental
 2. Preserve original values and page-level evidence; never silently normalize away discrepancies.
 3. Ambiguous or missing evidence must be reported as such, not guessed.
 4. Review decisions are attributable and do not alter the original documents or generated finding.
-5. Uploaded project drawings are confidential: never put real project files in source control or external AI prompts without an approved data-handling decision.
+5. Uploaded project drawings are confidential: keep working PDFs on the developer's machine outside this Git repository. Only synthetic or explicitly approved/licensed test fixtures may be committed. Do not send document content to external AI services unless explicitly approved.
 6. Engineers remain responsible for review and disposition.
 
 ## Development status
@@ -81,3 +81,39 @@ Open the local URL printed by Next.js (normally `http://localhost:3000`). Select
 This is experimental visual registration and pixel comparison, not engineering review automation. It can compensate for page size, scale, rotation, and translation differences when the pages contain enough shared visual features. Low-confidence matches are rejected. It does not analyze later pages, correct perspective distortion, or reliably handle unrelated drawings, substantial redesigns, or different crops that share too little content. It may flag text/revision differences or miss real discrepancies, so review the alignment, originals, and every highlighted candidate. The exported PDF contains only the aligned first page and is rasterized. The `sample-drawings` folder contains a synthetic pair with an intentionally shifted beam for trying the workflow.
 
 Run `npm run typecheck` to check the frontend TypeScript types.
+
+## Run the local backend and database
+
+Install Python 3.12 or later and Docker Desktop. From the repository root, start PostgreSQL:
+
+```powershell
+docker compose up -d db
+```
+
+In another terminal, install the backend and its development tools, then start the API:
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+```
+
+Apply the initial schema and start the API:
+
+```powershell
+python -m app.migrate
+uvicorn app.main:app --reload
+```
+
+Start the worker in a third terminal, using the same backend virtual environment:
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+python -m app.worker.runner
+```
+
+The worker polls the PostgreSQL queue and retries transient failures up to three times. For a single-job run, use `python -m app.worker.runner --once`. The API health check is at `http://localhost:8000/health`; interactive API documentation is at `http://localhost:8000/docs`. Project CRUD routes are under `/api/v1/projects`; multipart PDF upload and document listing are under `/api/v1/projects/{project_id}/documents`. Uploaded PDFs default to `%LOCALAPPDATA%\ShopDrawingReviewer\uploads` on Windows or `~/.local/share/shop-drawing-reviewer/uploads` elsewhere; set `SHOP_REVIEWER_STORAGE_DIR` to choose another local folder. The worker extracts per-page text and dimensions and attempts the documented first beam schedule layout. Rows preserve original text, normalized values, page coordinates, confidence, and review state. Unrecognized layouts and scanned/no-text files receive actionable warnings and `needs_review`; corrupt and encrypted PDFs receive explicit failure statuses. No prototype size/page limit is imposed. The database is bound to localhost and uses prototype-only credentials. Stop the API and worker with Ctrl+C and stop PostgreSQL with `docker compose down` from the repository root.
+
+Run backend checks from `backend/` with `ruff check app tests` and `pytest`. PostgreSQL integration tests run when `TEST_DATABASE_URL` is set and migrations have been applied; the CI workflow provisions a test database automatically.

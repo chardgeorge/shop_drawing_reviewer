@@ -29,12 +29,12 @@ Assumes a small cross-functional team: product/engineering lead, one frontend-ca
 
 | Week | Focus | Deliverable / exit gate |
 |---|---|---|
-| 1 | Product decisions and repository setup | Agree user roles, supported PDF limits, first schedule format, deployment region, retention, auth, and pilot success metrics. Create frontend/backend/test scaffolds, formatting/linting, CI, and local Postgres setup. |
-| 2 | Data model and project API | Apply initial migrations; project CRUD; typed API contract; project authorization seam; API integration tests. |
-| 3 | Document registration and storage | Local filesystem adapter and hosted-storage interface; upload lifecycle; immutable revisions; size/type validation; access control tests. |
-| 4 | Ingestion pipeline | Worker/job lifecycle and retries; PDF validation/page metadata; PyMuPDF text extraction; observable failure states and diagnostics. |
-| 5 | Beam schedule parsing | Parse the first agreed schedule layout; capture raw rows, mark, section, page and bounding box; begin golden synthetic/approved fixture set. |
-| 6 | Extraction review UI | Document status screen, PDF.js page viewer, extracted-row table, corrections and provenance; structural engineer review of extraction errors. |
+| 1 | Product decisions and repository setup | Prototype scope agreed. Frontend/backend/test scaffolds, CI, and local Postgres configuration are in place; verify them in a configured local environment. |
+| 2 | Data model and project API | Project CRUD, typed API contract, migration runner, PostgreSQL integration tests, and CI database service implemented; PostgreSQL integration verification runs in CI or locally when a database is configured. |
+| 3 | Document registration and storage | Local filesystem-backed multipart upload, opaque immutable storage keys, PDF metadata/hash registration, validation, listing, and PostgreSQL integration coverage implemented; hosted-storage adapter remains deferred. |
+| 4 | Ingestion pipeline | Durable retryable worker queue, PyMuPDF validation/text extraction, per-page dimensions/text, scanned-PDF warning state, and observable failures implemented; PostgreSQL integration runs in CI or when a local database is configured. |
+| 5 | Beam schedule parsing | Implemented a conservative selectable-text parser for one generic two-column header layout; persist raw/canonical values, page/bounding-box provenance, confidence, and warnings. Synthetic parser tests cover normal and duplicate marks. Layout-specific golden-corpus/engineer validation remains open. |
+| 6 | Extraction review UI | Implemented project/PDF upload, ingestion-status polling, browser PDF viewing, extracted-row review, correction, accept/reject, and source provenance. The native browser viewer is used instead of PDF.js. Engineer validation and visual bbox overlays remain open. |
 | 7 | Rule engine and comparison | Stable canonicalizer; mark matching; duplicate/ambiguous handling; `BEAM_SECTION_MISMATCH`; deterministic rule tests. |
 | 8 | Comparison API and issue review | Comparison run snapshots; issue list/filter; evidence navigation; review event workflow; API and UI integration tests. |
 | 9 | Quality and failure behavior | Expand fixture diversity; measure extraction and match metrics; test corrupt, encrypted, scanned, empty, and oversized PDFs; fix high-impact false positives. |
@@ -58,12 +58,22 @@ Each feature requires a labeled test corpus, measured false-positive/false-negat
 - Keep pull requests small, reviewable, and documented. Run formatters, static checks, unit tests, and relevant integration tests in CI.
 - Do not silently drop parser warnings or use an AI answer as a substitute for missing source evidence.
 
-## 5. Decisions to resolve before production
+## 5. Agreed local prototype decisions
+
+These decisions scope the local prototype only; they do not establish production requirements.
+
+- **Users and access:** individual engineers running the app locally; no login or credentials.
+- **PDF input:** assume selectable-text PDFs. Scanned PDFs and OCR are out of scope for the initial prototype.
+- **PDF limits:** no fixed size or page-count limits for the prototype. Add limits if local testing shows they are needed.
+- **File storage:** keep working project PDFs on the developer's machine, outside the Git repository. Only synthetic or explicitly approved/licensed fixtures may be committed.
+- **AI and document data:** default to no transmission of document content to external AI services. Revisit only with explicit data-handling approval.
+
+## 6. Decisions to resolve before production
 
 1. Identity provider, user/organization model, and tenant-isolation requirements.
 2. Hosting region, data residency, encryption/key ownership, retention and deletion policy, backup/restore targets.
-3. Whether any document text may be sent to OpenAI, under which service terms and data-retention settings; default is no AI transmission until approved.
-4. Supported PDF size/page limits and first target beam schedule layouts.
+3. Whether any document text may be sent to an AI service, under which service terms and data-retention settings; prototype default is no transmission until approved.
+4. Supported PDF size/page limits and first target beam schedule layouts beyond selectable-text PDFs.
 5. Pilot corpus access/permissions, ground-truth labeling, and acceptance thresholds for extraction and comparison.
 6. Review status semantics, audit retention, and whether accepted/rejected decisions need formal sign-off.
 7. Frontend/backend deployment platform and operational ownership.

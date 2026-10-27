@@ -363,6 +363,41 @@ export default function UploadWorkspace() {
     );
   }
 
+  if (reviewProjectId) {
+    return (
+      <div className="app-shell">
+        <aside className="sidebar">
+          <a className="brand" href="#" aria-label="Shop Drawing Reviewer home">
+            <span className="brand-mark"><Icon name="logo" size={22} /></span>
+            <span className="brand-copy"><strong>shopcheck</strong><span>STRUCTURAL REVIEW</span></span>
+          </a>
+          <div className="workspace-label">WORKSPACE</div>
+          <nav className="sidebar-nav" aria-label="Main navigation">
+            <a className="nav-item active" href="#review"><Icon name="grid" /><span>New review</span></a>
+          </nav>
+          <div className="sidebar-bottom">
+            <div className="sidebar-help"><span className="help-mark"><Icon name="shield" size={18} /></span><div><strong>Built for engineering review</strong><p>Your judgment stays in control.</p></div></div>
+            <button className="profile-button" type="button" aria-label="Account settings"><span className="avatar">GE</span><span className="profile-copy"><strong>Guest engineer</strong><span>Local preview</span></span><Icon name="settings" size={18} /></button>
+          </div>
+        </aside>
+        <main className="main-content" id="review">
+          <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span className="breadcrumb-divider">/</span><strong>Extraction review</strong></div><div className="topbar-status"><span className="status-dot" />Local review</div></header>
+          <div className="content-wrap">
+            <ReviewWorkspace
+              projectId={reviewProjectId}
+              documents={uploadedDocuments}
+              sourceFiles={files}
+              onDocumentsChange={setUploadedDocuments}
+              onBack={() => setReviewProjectId("")}
+              demoMode={demoMode}
+            />
+            <div className="prototype-note"><span className="prototype-indicator" /><span>PDFs are stored on this machine and are not sent to external AI services.</span></div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -469,6 +504,8 @@ export default function UploadWorkspace() {
                 type="text"
                 placeholder="e.g. North Plant — Structural Steel"
                 maxLength={120}
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
               />
               <span className="project-input-hint">A name helps you find this review later</span>
             </div>
@@ -496,7 +533,7 @@ export default function UploadWorkspace() {
               <span>
                 {totalFiles > 0
                   ? `${totalFiles} PDF${totalFiles === 1 ? "" : "s"} selected · ${formatBytes(totalSize)} total`
-                  : "Files stay in this browser in preview mode."}
+                  : "PDFs upload only to the local backend."}
               </span>
             </div>
             <button
@@ -507,6 +544,9 @@ export default function UploadWorkspace() {
             >
               {isComparing ? "Comparing PDFs..." : "Compare first pages"}
               {!isComparing && <Icon name="arrow" size={18} />}
+            </button>
+            <button className="demo-button" type="button" onClick={openDemoReview}>
+              Open demo data
             </button>
           </div>
 

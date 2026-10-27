@@ -76,7 +76,7 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Next.js (normally `http://localhost:3000`). Select or drag one or more PDFs into each drawing panel, then choose Continue to create a project and upload the files to the local API. Keep the API, PostgreSQL, and ingestion worker running in separate terminals. The review screen polls ingestion status, shows extracted beam rows beside the source PDF, and lets you correct, accept, or reject rows. Browser PDF support is used for viewing and page navigation.
+Open the local URL printed by Next.js (normally `http://localhost:3000`). Select or drag one or more PDFs into each drawing panel, then choose Continue to create a project and upload the files to the local API. Keep the API, PostgreSQL, and ingestion worker running in separate terminals. Continue opens a side-by-side engineer/shop PDF comparison and marks section mismatches for review; the comparison also shows the engineer value, shop value, page, and source evidence. Browser PDF support is used for viewing and page navigation. For a frontend-only demo when the backend is unavailable, choose **Open demo data**; this is clearly labeled sample data and does not upload the selected files.
 
 Run `npm run typecheck` to check the frontend TypeScript types.
 

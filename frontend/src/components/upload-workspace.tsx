@@ -45,7 +45,87 @@ type BeamRow = {
   review_state: "needs_review" | "accepted" | "rejected";
 };
 
+function createDemoRows(): BeamRow[] {
+  return [
+    {
+      id: "demo-row-1",
+      member_mark_raw: "B1",
+      section_raw: "W12x26",
+      member_mark: "B1",
+      section: "W12x26",
+      page_number: 1,
+      source_bbox: { x0: 72, y0: 118, x1: 290, y1: 134 },
+      confidence: 0.96,
+      review_state: "needs_review",
+    },
+    {
+      id: "demo-row-2",
+      member_mark_raw: "B2",
+      section_raw: "W14x30",
+      member_mark: "B2",
+      section: "W14x30",
+      page_number: 1,
+      source_bbox: { x0: 72, y0: 148, x1: 290, y1: 164 },
+      confidence: 0.91,
+      review_state: "needs_review",
+    },
+    {
+      id: "demo-row-3",
+      member_mark_raw: "B3",
+      section_raw: "W16x36",
+      member_mark: "B3",
+      section: "W16x36",
+      page_number: 1,
+      source_bbox: { x0: 72, y0: 178, x1: 290, y1: 194 },
+      confidence: 0.84,
+      review_state: "needs_review",
+    },
+  ];
+}
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const DEMO_PROJECT_ID = "demo-project";
+
+function createDemoDocuments(): ExtractedDocument[] {
+  return [
+    {
+      id: "demo-engineer-document",
+      role: "engineer",
+      file_name: "engineer-beam-schedule.pdf",
+      status: "ready",
+      extraction: {
+        id: "demo-engineer-extraction",
+        status: "completed",
+        page_count: 2,
+        diagnostics: { schedule_row_count: 3 },
+        error_code: null,
+        error_message: null,
+      },
+    },
+    {
+      id: "demo-shop-document",
+      role: "shop",
+      file_name: "shop-drawing-schedule.pdf",
+      status: "needs_review",
+      extraction: {
+        id: "demo-shop-extraction",
+        status: "completed",
+        page_count: 1,
+        diagnostics: {
+          schedule_row_count: 3,
+          warnings: [
+            {
+              code: "DEMO_REVIEW",
+              message: "Demo data only: review the extracted values before comparison.",
+            },
+          ],
+        },
+        error_code: null,
+        error_message: null,
+      },
+    },
+  ];
+}
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, init);
@@ -61,23 +141,51 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 function ReviewWorkspace({
   projectId,
   documents,
+  sourceFiles,
   onDocumentsChange,
   onBack,
+  demoMode = false,
 }: {
   projectId: string;
   documents: ExtractedDocument[];
+  sourceFiles: Record<DrawingSide, DrawingFile[]>;
   onDocumentsChange: Dispatch<SetStateAction<ExtractedDocument[]>>;
   onBack: () => void;
+  demoMode?: boolean;
 }) {
   const [selectedDocumentId, setSelectedDocumentId] = useState(documents[0]?.id ?? "");
-  const [rows, setRows] = useState<BeamRow[]>([]);
+  const [rows, setRows] = useState<BeamRow[]>(() => (demoMode ? createDemoRows() : []));
   const [drafts, setDrafts] = useState<Record<string, { member_mark: string; section: string }>>({});
   const [selectedPage, setSelectedPage] = useState(1);
   const [error, setError] = useState("");
   const [savingRowId, setSavingRowId] = useState("");
+  const [engineerRows, setEngineerRows] = useState<BeamRow[]>([]);
+  const [shopRows, setShopRows] = useState<BeamRow[]>([]);
 
   const selectedDocument = documents.find((document) => document.id === selectedDocumentId);
   const extractionId = selectedDocument?.extraction?.id;
+  const engineerDocument = documents.find((document) => document.role === "engineer");
+  const shopDocument = documents.find((document) => document.role === "shop");
+
+  const previewUrls = useMemo(() => {
+    if (!demoMode) return {};
+    return {
+      engineer: sourceFiles.engineering[0]
+        ? URL.createObjectURL(sourceFiles.engineering[0].file)
+        : "",
+      shop: sourceFiles.shop[0]
+        ? URL.createObjectURL(sourceFiles.shop[0].file)
+        : "",
+    };
+  }, [demoMode, sourceFiles]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(previewUrls).forEach((url) => {
+        if (url) URL.revokeObjectURL(url);
+      });
+    };
+  }, [previewUrls]);
 
   useEffect(() => {
     let active = true;
@@ -93,7 +201,7 @@ function ReviewWorkspace({
         if (active) setError((requestError as Error).message);
       }
     };
-    const pending = documents.some(
+    const pending = !demoMode && documents.some(
       (document) => document.status === "queued" || document.status === "processing",
     );
     if (!pending) return;
@@ -106,6 +214,10 @@ function ReviewWorkspace({
 
   useEffect(() => {
     let active = true;
+    if (demoMode) {
+      setRows(createDemoRows());
+      return;
+    }
     setRows([]);
     if (!selectedDocument || !extractionId || selectedDocument.extraction?.status !== "completed") {
       return;
@@ -129,6 +241,47 @@ function ReviewWorkspace({
     };
   }, [selectedDocument, extractionId]);
 
+  useEffect(() => {
+    let active = true;
+    if (demoMode) {
+      const demoRows = createDemoRows();
+      setEngineerRows(demoRows);
+      setShopRows(
+        demoRows.map((row, index) =>
+          index === 1
+            ? { ...row, id: "demo-shop-row-2", section: "W16x36", section_raw: "W16x36" }
+            : { ...row, id: `demo-shop-${index + 1}` },
+        ),
+      );
+      return;
+    }
+
+    const loadRows = async (
+      document: ExtractedDocument | undefined,
+      setDocumentRows: (rows: BeamRow[]) => void,
+    ) => {
+      if (!document?.extraction?.id || document.extraction.status !== "completed") {
+        setDocumentRows([]);
+        return;
+      }
+      const response = await requestJson<{ items: BeamRow[] }>(
+        `/api/v1/documents/${document.id}/extraction-runs/${document.extraction.id}/beam-rows`,
+      );
+      if (active) setDocumentRows(response.items);
+    };
+
+    Promise.all([
+      loadRows(engineerDocument, setEngineerRows),
+      loadRows(shopDocument, setShopRows),
+    ]).catch((requestError: Error) => {
+      if (active) setError(requestError.message);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [demoMode, engineerDocument, shopDocument]);
+
   async function updateRow(
     row: BeamRow,
     update: { review_state?: BeamRow["review_state"]; member_mark?: string; section?: string },
@@ -136,12 +289,31 @@ function ReviewWorkspace({
     setSavingRowId(row.id);
     setError("");
     try {
+      if (demoMode) {
+        const applyUpdate = (items: BeamRow[]) =>
+          items.map((item) =>
+            item.id === row.id
+              ? {
+                  ...item,
+                  ...update,
+                  member_mark: update.member_mark ?? item.member_mark,
+                  section: update.section ?? item.section,
+                }
+              : item,
+          );
+        setRows(applyUpdate);
+        setShopRows(applyUpdate);
+        return;
+      }
       const updated = await requestJson<BeamRow>(`/api/v1/beam-rows/${row.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(update),
       });
       setRows((current) => current.map((item) => (item.id === row.id ? updated : item)));
+      setShopRows((current) =>
+        current.map((item) => (item.id === row.id ? updated : item)),
+      );
       const latestDocument = await requestJson<ExtractedDocument>(
         `/api/v1/documents/${selectedDocumentId}`,
       );
@@ -175,7 +347,10 @@ function ReviewWorkspace({
           <h1 id="review-heading">Review extracted beam schedules</h1>
           <p className="intro-copy">Check each extracted value against its source PDF before using it.</p>
         </div>
-        <button className="browse-button" type="button" onClick={onBack}>Back to documents</button>
+        <div className="review-heading-actions">
+          {demoMode && <span className="demo-badge">DEMO DATA</span>}
+          <button className="browse-button" type="button" onClick={onBack}>Back to documents</button>
+        </div>
       </div>
       <div className="review-document-tabs" aria-label="Uploaded documents">
         {documents.map((document) => (
@@ -202,58 +377,83 @@ function ReviewWorkspace({
           {selectedDocument.extraction?.diagnostics.warnings?.map((warning, index) => (
             <div className="notice-message" key={`${warning.code}-${index}`}>{warning.message}</div>
           ))}
-          <div className="review-layout">
-            <div className="pdf-panel">
-              <div className="review-panel-heading">
-                <strong>Source PDF</strong>
-                <span>Page {viewerPage}{selectedDocument.extraction?.page_count ? ` of ${selectedDocument.extraction.page_count}` : ""}</span>
-              </div>
-              <iframe title={`Source PDF: ${selectedDocument.file_name}`} src={viewerUrl} />
-            </div>
-            <div className="schedule-panel">
-              <div className="review-panel-heading">
-                <strong>Beam schedule rows</strong>
-                <span>{rows.length} extracted</span>
-              </div>
-              {rows.length === 0 ? (
-                <div className="review-empty">No supported beam schedule rows were found. Check the warning above and the source PDF.</div>
-              ) : (
-                <div className="schedule-row-list">
-                  {rows.map((row) => {
-                    const draft = drafts[row.id] ?? {
-                      member_mark: row.member_mark ?? "",
-                      section: row.section ?? "",
-                    };
-                    return (
-                      <article className="schedule-row-card" key={row.id} onFocus={() => setSelectedPage(row.page_number)}>
-                        <div className="schedule-row-title">
-                          <span>Page {row.page_number} · {row.review_state.replace("_", " ")}</span>
-                          <span>{row.confidence === null ? "—" : `${Math.round(row.confidence * 100)}% confidence`}</span>
+          <div className="comparison-pdf-grid">
+            {(["engineer", "shop"] as const).map((role) => {
+              const document = role === "engineer" ? engineerDocument : shopDocument;
+              const fileUrl = previewUrls[role];
+              const backendUrl = document
+                ? `${API_BASE_URL}/api/v1/documents/${document.id}/file#page=${viewerPage}`
+                : "";
+              const isShop = role === "shop";
+              return (
+                <div className={`comparison-pdf-panel ${isShop && shopRows.length > 0 ? "has-discrepancies" : ""}`} key={role}>
+                  <div className="review-panel-heading">
+                    <strong>{isShop ? "Shop drawing PDF" : "Engineer PDF"}</strong>
+                    <span>{document?.file_name ?? "No document"}</span>
+                  </div>
+                  {demoMode && fileUrl ? (
+                    <iframe title={`${role} PDF preview`} src={`${fileUrl}#page=${viewerPage}`} />
+                  ) : demoMode ? (
+                    <div className="demo-pdf">
+                      <div className="demo-pdf-page">
+                        <strong>{isShop ? "Shop drawing schedule" : "Engineer beam schedule"}</strong>
+                        <span>Page {viewerPage}</span>
+                        <div className="demo-pdf-lines" aria-hidden="true">
+                          <span />
+                          <span />
+                          <span />
+                          <span />
                         </div>
-                        <label>Member mark
-                          <input value={draft.member_mark} onChange={(event) => setDrafts((current) => ({ ...current, [row.id]: { ...draft, member_mark: event.target.value } }))} />
-                        </label>
-                        <label>Section / size
-                          <input value={draft.section} onChange={(event) => setDrafts((current) => ({ ...current, [row.id]: { ...draft, section: event.target.value } }))} />
-                        </label>
-                        <div className="schedule-row-actions">
-                          <button type="button" disabled={savingRowId === row.id} onClick={() => updateRow(row, { member_mark: draft.member_mark, section: draft.section })}>Save correction</button>
-                          <button type="button" disabled={savingRowId === row.id} onClick={() => updateRow(row, { review_state: "accepted" })}>Accept</button>
-                          <button type="button" disabled={savingRowId === row.id} onClick={() => updateRow(row, { review_state: "rejected" })}>Reject</button>
-                        </div>
-                        {(row.member_mark_raw || row.section_raw) && (
-                          <small className="provenance-note">
-                            Extracted: {row.member_mark_raw ?? "—"} · {row.section_raw ?? "—"}
-                            {row.source_bbox && ` · source box ${Math.round(row.source_bbox.x0)}, ${Math.round(row.source_bbox.y0)}`}
-                          </small>
-                        )}
-                      </article>
-                    );
-                  })}
+                        <p>{isShop ? "Discrepancies are highlighted below." : "Reference design values."}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <iframe title={`${role} PDF: ${document?.file_name ?? role}`} src={backendUrl} />
+                  )}
+                  {isShop && shopRows.length > 0 && (
+                    <div className="pdf-discrepancy-ribbon">Discrepancies highlighted below</div>
+                  )}
                 </div>
-              )}
-            </div>
+              );
+            })}
           </div>
+          <section className="discrepancy-panel" aria-labelledby="discrepancy-heading">
+            <div className="review-panel-heading">
+              <strong id="discrepancy-heading">Review discrepancies</strong>
+              <span>{shopRows.filter((shopRow) => {
+                const engineerRow = engineerRows.find((row) => row.member_mark === shopRow.member_mark);
+                return engineerRow && engineerRow.section !== shopRow.section;
+              }).length} found</span>
+            </div>
+            <div className="discrepancy-list">
+              {shopRows.map((shopRow) => {
+                const engineerRow = engineerRows.find((row) => row.member_mark === shopRow.member_mark);
+                const mismatch = engineerRow && engineerRow.section !== shopRow.section;
+                if (!mismatch) return null;
+                return (
+                  <article className="discrepancy-card" key={shopRow.id}>
+                    <div className="discrepancy-card-heading">
+                      <strong>{shopRow.member_mark}</strong>
+                      <span>Page {shopRow.page_number} · Shop drawing highlighted</span>
+                    </div>
+                    <div className="discrepancy-values">
+                      <span><small>Engineer</small>{engineerRow.section}</span>
+                      <span><small>Shop drawing</small><mark>{shopRow.section}</mark></span>
+                    </div>
+                    <p>Section size differs from the engineer-issued reference. Confirm the shop drawing before accepting.</p>
+                    <div className="schedule-row-actions">
+                      <button type="button" onClick={() => setSelectedPage(shopRow.page_number)}>View source</button>
+                      <button type="button" onClick={() => updateRow(shopRow, { review_state: "accepted" })}>Accept discrepancy</button>
+                    </div>
+                  </article>
+                );
+              })}
+              {shopRows.length > 0 && !shopRows.some((shopRow) => {
+                const engineerRow = engineerRows.find((row) => row.member_mark === shopRow.member_mark);
+                return engineerRow && engineerRow.section !== shopRow.section;
+              }) && <div className="review-empty">No section discrepancies were found.</div>}
+            </div>
+          </section>
         </>
       ) : (
         <div className="review-empty">No document selected for project {projectId}.</div>
@@ -401,6 +601,7 @@ export default function UploadWorkspace() {
   const [isUploading, setIsUploading] = useState(false);
   const [reviewProjectId, setReviewProjectId] = useState("");
   const [uploadedDocuments, setUploadedDocuments] = useState<ExtractedDocument[]>([]);
+  const [demoMode, setDemoMode] = useState(false);
   const engineeringInput = useRef<HTMLInputElement>(null);
   const shopInput = useRef<HTMLInputElement>(null);
 
@@ -414,6 +615,13 @@ export default function UploadWorkspace() {
       ),
     [files],
   );
+
+  function openDemoReview() {
+    setDemoMode(true);
+    setReviewProjectId(DEMO_PROJECT_ID);
+    setUploadedDocuments(createDemoDocuments());
+    setNotice("");
+  }
 
   async function beginReview() {
     setIsUploading(true);
@@ -452,7 +660,15 @@ export default function UploadWorkspace() {
       setReviewProjectId(project.id);
       setUploadedDocuments(uploaded);
     } catch (requestError) {
-      setNotice((requestError as Error).message);
+      const message = (requestError as Error).message;
+      if (message.includes("Failed to fetch")) {
+        openDemoReview();
+        setNotice(
+          "Backend is not running, so the prototype opened a clearly labeled demo review with sample extracted rows.",
+        );
+      } else {
+        setNotice(message);
+      }
     } finally {
       setIsUploading(false);
     }
@@ -641,8 +857,10 @@ export default function UploadWorkspace() {
             <ReviewWorkspace
               projectId={reviewProjectId}
               documents={uploadedDocuments}
+              sourceFiles={files}
               onDocumentsChange={setUploadedDocuments}
               onBack={() => setReviewProjectId("")}
+              demoMode={demoMode}
             />
             <div className="prototype-note"><span className="prototype-indicator" /><span>PDFs are stored on this machine and are not sent to external AI services.</span></div>
           </div>
@@ -797,6 +1015,9 @@ export default function UploadWorkspace() {
             >
               {isUploading ? "Uploading…" : "Continue"}
               <Icon name="arrow" size={18} />
+            </button>
+            <button className="demo-button" type="button" onClick={openDemoReview}>
+              Open demo data
             </button>
           </div>
 

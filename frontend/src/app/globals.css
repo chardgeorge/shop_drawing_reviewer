@@ -1354,6 +1354,27 @@ h1 {
   background: #355d48;
 }
 
+.comparison-downloads {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.comparison-grid-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  color: #536677;
+  font-size: 10px;
+  font-weight: 620;
+  cursor: pointer;
+}
+
+.comparison-grid-toggle input {
+  accent-color: #14529a;
+}
+
 .comparison-caveat {
   margin: 14px 0 0;
   color: #806b45;
@@ -1412,6 +1433,14 @@ h1 {
   pointer-events: none;
 }
 
+.alignment-grid line {
+  stroke: #14529a;
+  stroke-width: 1;
+  stroke-dasharray: 4 5;
+  opacity: 0.62;
+  vector-effect: non-scaling-stroke;
+}
+
 @media (max-width: 760px) {
   .visual-comparison-controls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1419,6 +1448,10 @@ h1 {
 
   .comparison-result-heading {
     flex-direction: column;
+  }
+
+  .comparison-downloads {
+    width: 100%;
   }
 
   .comparison-previews {

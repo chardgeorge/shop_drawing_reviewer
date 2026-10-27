@@ -12,7 +12,8 @@ type CompareDrawing = {
   file: File;
 };
 
-type ComparisonDisplay = Omit<PdfComparison, "markedPdf"> & {
+type ComparisonDisplay = Omit<PdfComparison, "markedPdf" | "engineerMarkedPdf"> & {
+  engineerMarkedPdfUrl: string;
   markedPdfUrl: string;
 };
 
@@ -28,6 +29,69 @@ const IMPERIAL_SCALES = [
 ];
 
 const METRIC_SCALES = [10, 20, 25, 50, 75, 100, 150, 200, 250, 500, 1000];
+
+function ComparisonOverlay({
+  comparison,
+  showGrid,
+}: {
+  comparison: Pick<PdfComparison, "regions" | "width" | "height">;
+  showGrid: boolean;
+}) {
+  return (
+    <svg
+      className="difference-overlay"
+      viewBox={`0 0 ${comparison.width} ${comparison.height}`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      {showGrid && (
+        <g className="alignment-grid">
+          {Array.from({ length: 9 }, (_, index) => {
+            const fraction = (index + 1) / 10;
+            return (
+              <g key={index}>
+                <line
+                  x1={fraction * comparison.width}
+                  y1={0}
+                  x2={fraction * comparison.width}
+                  y2={comparison.height}
+                />
+                <line
+                  x1={0}
+                  y1={fraction * comparison.height}
+                  x2={comparison.width}
+                  y2={fraction * comparison.height}
+                />
+              </g>
+            );
+          })}
+        </g>
+      )}
+      {comparison.regions.map((region) => (
+        <g key={region.id}>
+          <rect
+            x={region.x}
+            y={region.y}
+            width={region.width}
+            height={region.height}
+            fill="rgba(220, 48, 48, 0.16)"
+            stroke="#cf3030"
+            strokeWidth={2}
+          />
+          <text
+            x={region.x + 3}
+            y={Math.max(14, region.y - 3)}
+            fill="#a71f1f"
+            fontSize={13}
+            fontWeight="bold"
+          >
+            {region.id}
+          </text>
+        </g>
+      ))}
+    </svg>
+  );
+}
 
 export default function VisualComparison({
   engineeringFiles,
@@ -47,6 +111,7 @@ export default function VisualComparison({
   const [engineerPageCount, setEngineerPageCount] = useState(0);
   const [shopPageCount, setShopPageCount] = useState(0);
   const [isComparing, setIsComparing] = useState(false);
+  const [showGrid, setShowGrid] = useState(false);
   const [notice, setNotice] = useState("");
   const [comparison, setComparison] = useState<ComparisonDisplay | null>(null);
 
@@ -101,7 +166,10 @@ export default function VisualComparison({
 
   useEffect(() => {
     if (!comparison) return;
-    return () => URL.revokeObjectURL(comparison.markedPdfUrl);
+    return () => {
+      URL.revokeObjectURL(comparison.engineerMarkedPdfUrl);
+      URL.revokeObjectURL(comparison.markedPdfUrl);
+    };
   }, [comparison]);
 
   if (engineeringFiles.length === 0 || shopFiles.length === 0) return null;
@@ -121,12 +189,17 @@ export default function VisualComparison({
         Number(engineerScale),
         Number(shopScale),
       );
-      const pdfBuffer = new ArrayBuffer(result.markedPdf.byteLength);
-      new Uint8Array(pdfBuffer).set(result.markedPdf);
+      const engineerPdfBuffer = new ArrayBuffer(result.engineerMarkedPdf.byteLength);
+      new Uint8Array(engineerPdfBuffer).set(result.engineerMarkedPdf);
+      const shopPdfBuffer = new ArrayBuffer(result.markedPdf.byteLength);
+      new Uint8Array(shopPdfBuffer).set(result.markedPdf);
       setComparison({
         ...result,
+        engineerMarkedPdfUrl: URL.createObjectURL(
+          new Blob([engineerPdfBuffer], { type: "application/pdf" }),
+        ),
         markedPdfUrl: URL.createObjectURL(
-          new Blob([pdfBuffer], { type: "application/pdf" }),
+          new Blob([shopPdfBuffer], { type: "application/pdf" }),
         ),
       });
     } catch (error) {
@@ -300,14 +373,31 @@ export default function VisualComparison({
                 Highlighted areas are visual candidates, not engineering conclusions.
               </p>
             </div>
-            <a
-              className="marked-pdf-link"
-              href={comparison.markedPdfUrl}
-              download={`${shopFile?.name.replace(/\.pdf$/i, "") ?? "shop-drawing"}-page-${shopPage}-marked-up.pdf`}
-            >
-              Download marked-up page
-            </a>
+            <div className="comparison-downloads">
+              <a
+                className="marked-pdf-link"
+                href={comparison.engineerMarkedPdfUrl}
+                download={`${engineerFile?.name.replace(/\.pdf$/i, "") ?? "engineer-drawing"}-page-${engineerPage}-marked-up.pdf`}
+              >
+                Download marked engineer page
+              </a>
+              <a
+                className="marked-pdf-link"
+                href={comparison.markedPdfUrl}
+                download={`${shopFile?.name.replace(/\.pdf$/i, "") ?? "shop-drawing"}-page-${shopPage}-aligned-marked-up.pdf`}
+              >
+                Download aligned marked shop page
+              </a>
+            </div>
           </div>
+          <label className="comparison-grid-toggle">
+            <input
+              type="checkbox"
+              checked={showGrid}
+              onChange={(event) => setShowGrid(event.target.checked)}
+            />
+            Show 10 × 10 alignment grid on both pages
+          </label>
           <p className="registration-summary">
             Aligned with {comparison.registration.inliers} reciprocal feature
             matches ({Math.round(comparison.registration.inlierPercent * 100)}%
@@ -320,49 +410,29 @@ export default function VisualComparison({
           <p className="comparison-caveat">
             Automatic alignment handles scale, rotation, translation, moderate
             skew, and differing page sizes when the sheets share enough geometry.
-            Low-confidence or unrelated pages are rejected. Compare originals
-            before acting; this output is rasterized and is not an approval.
+            Differences within a one-pixel neighborhood are ignored to reduce
+            line-weight and rasterization noise. Low-confidence or unrelated pages
+            are rejected. Uploaded PDFs are unchanged; downloads contain only the
+            selected page, rasterized and annotated, and are not an approval.
           </p>
           <div className="comparison-previews">
             <figure className="comparison-preview">
               <figcaption>
-                Engineer-issued · page {comparison.engineerPageNumber}
+                Engineer-issued · page {comparison.engineerPageNumber} · candidate discrepancies
               </figcaption>
-              <img src={comparison.engineerPreview} alt="Engineer-issued drawing page" />
+              <div className="comparison-image-wrap">
+                <img
+                  src={comparison.engineerPreview}
+                  alt="Engineer-issued drawing page with candidate discrepancy regions"
+                />
+                <ComparisonOverlay comparison={comparison} showGrid={showGrid} />
+              </div>
             </figure>
             <figure className="comparison-preview">
               <figcaption>Aligned shop page · visual candidates</figcaption>
               <div className="comparison-image-wrap">
                 <img src={comparison.shopPreview} alt="Aligned shop drawing page" />
-                <svg
-                  className="difference-overlay"
-                  viewBox={`0 0 ${comparison.width} ${comparison.height}`}
-                  preserveAspectRatio="none"
-                  aria-hidden="true"
-                >
-                  {comparison.regions.map((region) => (
-                    <g key={region.id}>
-                      <rect
-                        x={region.x}
-                        y={region.y}
-                        width={region.width}
-                        height={region.height}
-                        fill="rgba(220, 48, 48, 0.16)"
-                        stroke="#cf3030"
-                        strokeWidth={2}
-                      />
-                      <text
-                        x={region.x + 3}
-                        y={Math.max(14, region.y - 3)}
-                        fill="#a71f1f"
-                        fontSize={13}
-                        fontWeight="bold"
-                      >
-                        {region.id}
-                      </text>
-                    </g>
-                  ))}
-                </svg>
+                <ComparisonOverlay comparison={comparison} showGrid={showGrid} />
               </div>
             </figure>
           </div>

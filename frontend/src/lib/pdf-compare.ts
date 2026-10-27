@@ -16,6 +16,7 @@ export type RegistrationSummary = {
   matchedFeatures: number;
   inlierPercent: number;
   scale: number;
+  expectedScale: number;
   rotationDegrees: number;
   reprojectionError: number;
 };
@@ -51,6 +52,7 @@ const MIN_REGISTRATION_INLIERS = 20;
 const MIN_REGISTRATION_INLIER_PERCENT = 0.35;
 const MIN_MATCH_COVERAGE = 0.005;
 const MIN_MATCH_GRID_CELLS = 4;
+const MAX_SCALE_RATIO_DEVIATION = 1.35;
 
 async function loadPdf(file: File) {
   if (file.size > MAX_FILE_SIZE) {
@@ -354,6 +356,7 @@ function estimateAffineTransform(points: MatchedFeature[]) {
 async function alignShopPage(
   engineerCanvas: HTMLCanvasElement,
   shopCanvas: HTMLCanvasElement,
+  expectedScale: number,
 ): Promise<{ canvas: HTMLCanvasElement; registration: RegistrationSummary }> {
   const cv = await loadOpenCv();
   const engineerImage = cv.imread(engineerCanvas);
@@ -456,6 +459,10 @@ async function alignShopPage(
       estimate.transform.a * estimate.transform.d -
         estimate.transform.b * estimate.transform.c,
     ));
+    const scaleAgreement = Math.max(
+      scale / expectedScale,
+      expectedScale / scale,
+    );
     const rotationDegrees =
       (Math.atan2(estimate.transform.b, estimate.transform.a) * 180) / Math.PI;
     const reprojectionError = estimate.reprojectionError;
@@ -504,8 +511,14 @@ async function alignShopPage(
       destinationCoverage < MIN_MATCH_COVERAGE ||
       sourceGridCells < MIN_MATCH_GRID_CELLS ||
       destinationGridCells < MIN_MATCH_GRID_CELLS ||
-      reprojectionError > 4
+      reprojectionError > 4 ||
+      scaleAgreement > MAX_SCALE_RATIO_DEVIATION
     ) {
+      if (validTransform && scaleAgreement > MAX_SCALE_RATIO_DEVIATION) {
+        throw new Error(
+          `The detected scale change (${scale.toFixed(3)}×) does not match the selected sheet scales (expected ${expectedScale.toFixed(3)}× from shop to engineer). Check the page selections and drawing scale inputs.`,
+        );
+      }
       throw new Error(
         `Automatic alignment confidence is too low (${inliers} consistent features, ${Math.round(inlierPercent * 100)}% inliers). Use a clearer pair with more shared drawing content.`,
       );
@@ -540,6 +553,7 @@ async function alignShopPage(
         matchedFeatures: matchedFeatures.length,
         inlierPercent,
         scale,
+        expectedScale,
         rotationDegrees,
         reprojectionError,
       },
@@ -755,7 +769,19 @@ export async function comparePdfPages(
   shopFile: File,
   engineerPageNumber: number,
   shopPageNumber: number,
+  engineerScaleDenominator: number,
+  shopScaleDenominator: number,
 ): Promise<PdfComparison> {
+  if (
+    !Number.isFinite(engineerScaleDenominator) ||
+    engineerScaleDenominator <= 0 ||
+    !Number.isFinite(shopScaleDenominator) ||
+    shopScaleDenominator <= 0
+  ) {
+    throw new Error("Choose a valid drawing scale for both selected pages.");
+  }
+  const expectedScale = shopScaleDenominator / engineerScaleDenominator;
+
   const [engineer, shop] = await Promise.all([
     renderPage(engineerFile, engineerPageNumber),
     renderPage(shopFile, shopPageNumber),
@@ -764,6 +790,7 @@ export async function comparePdfPages(
   const { canvas: alignedShopCanvas, registration } = await alignShopPage(
     engineer.canvas,
     shop.canvas,
+    expectedScale,
   );
 
   const engineerContext = engineer.canvas.getContext("2d", {
@@ -813,5 +840,5 @@ export function comparePdfFirstPages(
   engineerFile: File,
   shopFile: File,
 ): Promise<PdfComparison> {
-  return comparePdfPages(engineerFile, shopFile, 1, 1);
+  return comparePdfPages(engineerFile, shopFile, 1, 1, 1, 1);
 }

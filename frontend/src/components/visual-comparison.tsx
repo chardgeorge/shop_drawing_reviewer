@@ -16,6 +16,19 @@ type ComparisonDisplay = Omit<PdfComparison, "markedPdf"> & {
   markedPdfUrl: string;
 };
 
+const IMPERIAL_SCALES = [
+  { denominator: 12, label: '1" = 1\'-0"' },
+  { denominator: 24, label: '1/2" = 1\'-0"' },
+  { denominator: 48, label: '1/4" = 1\'-0"' },
+  { denominator: 64, label: '3/16" = 1\'-0"' },
+  { denominator: 96, label: '1/8" = 1\'-0"' },
+  { denominator: 128, label: '3/32" = 1\'-0"' },
+  { denominator: 192, label: '1/16" = 1\'-0"' },
+  { denominator: 384, label: '1/32" = 1\'-0"' },
+];
+
+const METRIC_SCALES = [10, 20, 25, 50, 75, 100, 150, 200, 250, 500, 1000];
+
 export default function VisualComparison({
   engineeringFiles,
   shopFiles,
@@ -29,6 +42,8 @@ export default function VisualComparison({
   const [shopId, setShopId] = useState("");
   const [engineerPage, setEngineerPage] = useState(1);
   const [shopPage, setShopPage] = useState(1);
+  const [engineerScale, setEngineerScale] = useState("");
+  const [shopScale, setShopScale] = useState("");
   const [engineerPageCount, setEngineerPageCount] = useState(0);
   const [shopPageCount, setShopPageCount] = useState(0);
   const [isComparing, setIsComparing] = useState(false);
@@ -92,7 +107,7 @@ export default function VisualComparison({
   if (engineeringFiles.length === 0 || shopFiles.length === 0) return null;
 
   async function runComparison() {
-    if (!engineerFile || !shopFile) return;
+    if (!engineerFile || !shopFile || !engineerScale || !shopScale) return;
     onCompareStart?.();
     setIsComparing(true);
     setNotice("");
@@ -103,6 +118,8 @@ export default function VisualComparison({
         shopFile,
         engineerPage,
         shopPage,
+        Number(engineerScale),
+        Number(shopScale),
       );
       const pdfBuffer = new ArrayBuffer(result.markedPdf.byteLength);
       new Uint8Array(pdfBuffer).set(result.markedPdf);
@@ -123,6 +140,8 @@ export default function VisualComparison({
 
   const canCompare =
     Boolean(engineerFile && shopFile) &&
+    engineerScale !== "" &&
+    shopScale !== "" &&
     engineerPage <= engineerPageCount &&
     shopPage <= shopPageCount &&
     !isComparing;
@@ -138,7 +157,9 @@ export default function VisualComparison({
           <h2 id="visual-comparison-heading">Compare drawing pages</h2>
           <p>
             Choose one PDF from each set and the pages to compare. This visual
-            check is separate from project upload and schedule extraction.
+            check is separate from project upload and schedule extraction. Select
+            the drawing scale shown on each page so alignment can verify the
+            expected scale relationship.
           </p>
         </div>
       </div>
@@ -150,6 +171,7 @@ export default function VisualComparison({
             value={engineerId}
             onChange={(event) => {
               setEngineerId(event.target.value);
+              setEngineerScale("");
               setComparison(null);
               setNotice("");
             }}
@@ -165,6 +187,7 @@ export default function VisualComparison({
             value={engineerPage}
             onChange={(event) => {
               setEngineerPage(Number(event.target.value));
+              setEngineerScale("");
               setComparison(null);
             }}
             disabled={!engineerPageCount}
@@ -175,11 +198,35 @@ export default function VisualComparison({
           </select>
         </label>
         <label>
+          Engineer page scale *
+          <select
+            value={engineerScale}
+            onChange={(event) => {
+              setEngineerScale(event.target.value);
+              setComparison(null);
+            }}
+            required
+          >
+            <option value="">Select scale</option>
+            <optgroup label="Imperial">
+              {IMPERIAL_SCALES.map(({ denominator, label }) => (
+                <option key={denominator} value={denominator}>{label}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Metric">
+              {METRIC_SCALES.map((denominator) => (
+                <option key={denominator} value={denominator}>1:{denominator}</option>
+              ))}
+            </optgroup>
+          </select>
+        </label>
+        <label>
           Shop PDF
           <select
             value={shopId}
             onChange={(event) => {
               setShopId(event.target.value);
+              setShopScale("");
               setComparison(null);
               setNotice("");
             }}
@@ -195,6 +242,7 @@ export default function VisualComparison({
             value={shopPage}
             onChange={(event) => {
               setShopPage(Number(event.target.value));
+              setShopScale("");
               setComparison(null);
             }}
             disabled={!shopPageCount}
@@ -202,6 +250,29 @@ export default function VisualComparison({
             {Array.from({ length: shopPageCount }, (_, index) => index + 1).map((page) => (
               <option key={page} value={page}>{page}</option>
             ))}
+          </select>
+        </label>
+        <label>
+          Shop page scale *
+          <select
+            value={shopScale}
+            onChange={(event) => {
+              setShopScale(event.target.value);
+              setComparison(null);
+            }}
+            required
+          >
+            <option value="">Select scale</option>
+            <optgroup label="Imperial">
+              {IMPERIAL_SCALES.map(({ denominator, label }) => (
+                <option key={denominator} value={denominator}>{label}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Metric">
+              {METRIC_SCALES.map((denominator) => (
+                <option key={denominator} value={denominator}>1:{denominator}</option>
+              ))}
+            </optgroup>
           </select>
         </label>
         <button
@@ -241,6 +312,8 @@ export default function VisualComparison({
             Aligned with {comparison.registration.inliers} reciprocal feature
             matches ({Math.round(comparison.registration.inlierPercent * 100)}%
             inliers), average scale {comparison.registration.scale.toFixed(3)}×,
+            expected scale from the selected sheet scales{" "}
+            {comparison.registration.expectedScale.toFixed(3)}×,
             rotation {comparison.registration.rotationDegrees.toFixed(1)}°,
             residual {comparison.registration.reprojectionError.toFixed(2)} px.
           </p>

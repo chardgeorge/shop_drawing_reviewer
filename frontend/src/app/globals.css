@@ -1350,7 +1350,7 @@ h1 {
 
 .visual-comparison-controls {
   display: grid;
-  grid-template-columns: minmax(180px, 2fr) minmax(100px, 0.7fr) minmax(180px, 2fr) minmax(100px, 0.7fr) auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: end;
   gap: 12px;
   margin-top: 18px;
@@ -1377,6 +1377,7 @@ h1 {
 }
 
 .visual-comparison-controls .continue-button {
+  grid-column: 1 / -1;
   min-height: 38px;
   padding: 0 13px;
   white-space: nowrap;
@@ -1497,10 +1498,6 @@ h1 {
 @media (max-width: 760px) {
   .visual-comparison-controls {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .visual-comparison-controls .continue-button {
-    grid-column: 1 / -1;
   }
 
   .comparison-result-heading {

@@ -47,10 +47,41 @@ export type PdfComparison = {
   markedPdf: Uint8Array;
 };
 
+export type ManualAlignment = {
+  offsetX: number;
+  offsetY: number;
+  scale: number;
+  rotationDegrees: number;
+};
+
+export type PdfAlignment = {
+  engineerCanvas: HTMLCanvasElement;
+  autoAlignedShopCanvas: HTMLCanvasElement;
+  engineerPreview: string;
+  shopPreview: string;
+  width: number;
+  height: number;
+  registration: RegistrationSummary;
+  engineerPageCount: number;
+  shopPageCount: number;
+  engineerPageNumber: number;
+  shopPageNumber: number;
+  engineerPageWidth: number;
+  engineerPageHeight: number;
+};
+
+export class PdfAlignmentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PdfAlignmentError";
+  }
+}
+
 type RenderedPage = {
   canvas: HTMLCanvasElement;
   pageWidth: number;
   pageHeight: number;
+  renderScale: number;
   pageCount: number;
 };
 
@@ -65,6 +96,7 @@ const MIN_REGISTRATION_INLIER_PERCENT = 0.35;
 const MIN_MATCH_COVERAGE = 0.005;
 const MIN_MATCH_GRID_CELLS = 4;
 const MAX_SCALE_RATIO_DEVIATION = 1.35;
+const LINE_WEIGHT_TOLERANCE_RADIUS = 1;
 
 async function loadPdf(file: File) {
   if (file.size > MAX_FILE_SIZE) {
@@ -137,6 +169,7 @@ async function renderPage(file: File, pageNumber: number): Promise<RenderedPage>
       canvas,
       pageWidth: baseViewport.width,
       pageHeight: baseViewport.height,
+      renderScale: scale,
       pageCount: document.numPages,
     };
   } finally {
@@ -383,8 +416,16 @@ function estimateAffineTransform(points: MatchedFeature[]) {
 async function alignShopPage(
   engineerCanvas: HTMLCanvasElement,
   shopCanvas: HTMLCanvasElement,
+  expectedPixelScale: number,
   expectedScale: number,
-): Promise<{ canvas: HTMLCanvasElement; registration: RegistrationSummary }> {
+  engineerRenderScale: number,
+): Promise<{
+  engineerCanvas: HTMLCanvasElement;
+  canvas: HTMLCanvasElement;
+  pageWidth: number;
+  pageHeight: number;
+  registration: RegistrationSummary;
+}> {
   const cv = await loadOpenCv();
   const engineerImage = cv.imread(engineerCanvas);
   const shopImage = cv.imread(shopCanvas);
@@ -420,7 +461,7 @@ async function alignShopPage(
     );
 
     if (engineerDescriptors.empty() || shopDescriptors.empty()) {
-      throw new Error(
+      throw new PdfAlignmentError(
         "Could not find enough visual features to align these pages. Use drawings with more shared visible detail.",
       );
     }
@@ -459,14 +500,14 @@ async function alignShopPage(
     }
 
     if (matchedFeatures.length < MIN_REGISTRATION_INLIERS) {
-      throw new Error(
+      throw new PdfAlignmentError(
         "Could not find enough matching features to align the pages. Make sure both drawings show the same plan area.",
       );
     }
 
     const estimate = estimateAffineTransform(matchedFeatures);
     if (!estimate) {
-      throw new Error(
+      throw new PdfAlignmentError(
         "Could not compute a reliable page alignment. Use drawings with more shared visible detail.",
       );
     }
@@ -487,8 +528,8 @@ async function alignShopPage(
         estimate.transform.b * estimate.transform.c,
     ));
     const scaleAgreement = Math.max(
-      scale / expectedScale,
-      expectedScale / scale,
+      scale / expectedPixelScale,
+      expectedPixelScale / scale,
     );
     const rotationDegrees =
       (Math.atan2(estimate.transform.b, estimate.transform.a) * 180) / Math.PI;
@@ -542,39 +583,94 @@ async function alignShopPage(
       scaleAgreement > MAX_SCALE_RATIO_DEVIATION
     ) {
       if (validTransform && scaleAgreement > MAX_SCALE_RATIO_DEVIATION) {
-        throw new Error(
-          `The detected scale change (${scale.toFixed(3)}×) does not match the selected sheet scales (expected ${expectedScale.toFixed(3)}× from shop to engineer). Check the page selections and drawing scale inputs.`,
+        throw new PdfAlignmentError(
+          `The detected pixel scale change (${scale.toFixed(3)}×) does not match the page-size-adjusted expectation (${expectedPixelScale.toFixed(3)}×; selected shop-to-engineer drawing scale ratio ${expectedScale.toFixed(3)}×). Check the page selections and drawing scale inputs.`,
         );
       }
-      throw new Error(
+      throw new PdfAlignmentError(
         `Automatic alignment confidence is too low (${inliers} consistent features, ${Math.round(inlierPercent * 100)}% inliers). Use a clearer pair with more shared drawing content.`,
       );
     }
 
+    const shopCorners = [
+      { x: 0, y: 0 },
+      { x: shopCanvas.width, y: 0 },
+      { x: 0, y: shopCanvas.height },
+      { x: shopCanvas.width, y: shopCanvas.height },
+    ].map((point) => mapPoint(estimate.transform, point));
+    const minimumX = Math.min(0, ...shopCorners.map((point) => point.x));
+    const minimumY = Math.min(0, ...shopCorners.map((point) => point.y));
+    const maximumX = Math.max(
+      engineerCanvas.width,
+      ...shopCorners.map((point) => point.x),
+    );
+    const maximumY = Math.max(
+      engineerCanvas.height,
+      ...shopCorners.map((point) => point.y),
+    );
+    const boundsWidth = maximumX - minimumX;
+    const boundsHeight = maximumY - minimumY;
+    if (
+      !Number.isFinite(boundsWidth) ||
+      !Number.isFinite(boundsHeight) ||
+      boundsWidth <= 0 ||
+      boundsHeight <= 0
+    ) {
+      throw new Error("Could not calculate a shared canvas for these pages.");
+    }
+
+    const outputScale = Math.min(
+      1,
+      MAX_RENDER_DIMENSION / Math.max(boundsWidth, boundsHeight),
+    );
+    const outputWidth = Math.max(1, Math.ceil(boundsWidth * outputScale));
+    const outputHeight = Math.max(1, Math.ceil(boundsHeight * outputScale));
+    const offsetX = -minimumX * outputScale;
+    const offsetY = -minimumY * outputScale;
+    const outputEngineer = window.document.createElement("canvas");
+    outputEngineer.width = outputWidth;
+    outputEngineer.height = outputHeight;
+    const engineerContext = outputEngineer.getContext("2d");
+    if (!engineerContext) {
+      throw new Error("This browser could not create a shared PDF comparison canvas.");
+    }
+    engineerContext.fillStyle = "#fff";
+    engineerContext.fillRect(0, 0, outputWidth, outputHeight);
+    engineerContext.drawImage(
+      engineerCanvas,
+      offsetX,
+      offsetY,
+      engineerCanvas.width * outputScale,
+      engineerCanvas.height * outputScale,
+    );
+
     affine = cv.matFromArray(2, 3, cv.CV_64FC1, [
-      estimate.transform.a,
-      estimate.transform.c,
-      estimate.transform.tx,
-      estimate.transform.b,
-      estimate.transform.d,
-      estimate.transform.ty,
+      estimate.transform.a * outputScale,
+      estimate.transform.c * outputScale,
+      (estimate.transform.tx - minimumX) * outputScale,
+      estimate.transform.b * outputScale,
+      estimate.transform.d * outputScale,
+      (estimate.transform.ty - minimumY) * outputScale,
     ]);
     aligned = new cv.Mat();
     cv.warpAffine(
       shopImage,
       aligned,
       affine,
-      new cv.Size(engineerCanvas.width, engineerCanvas.height),
+      new cv.Size(outputWidth, outputHeight),
       cv.INTER_LINEAR,
       cv.BORDER_CONSTANT,
       new cv.Scalar(255, 255, 255, 255),
     );
     const canvas = window.document.createElement("canvas");
-    canvas.width = engineerCanvas.width;
-    canvas.height = engineerCanvas.height;
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
     cv.imshow(canvas, aligned);
     return {
+      engineerCanvas: outputEngineer,
       canvas,
+      pageWidth: outputWidth / (engineerRenderScale * outputScale),
+      pageHeight: outputHeight / (engineerRenderScale * outputScale),
       registration: {
         method: "features",
         inliers,
@@ -612,38 +708,67 @@ function findDifferenceRegions(
   const columns = Math.ceil(engineer.width / TILE_SIZE);
   const rows = Math.ceil(engineer.height / TILE_SIZE);
   const tileCounts = new Uint32Array(columns * rows);
-  const engineerPixels = engineer.data;
-  const shopPixels = shop.data;
+  const pixelCount = engineer.width * engineer.height;
+  const engineerLevels = new Uint8Array(pixelCount);
+  const shopLevels = new Uint8Array(pixelCount);
+
+  for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+    const channel = pixel * 4;
+    engineerLevels[pixel] = Math.round(
+      0.299 * engineer.data[channel] +
+        0.587 * engineer.data[channel + 1] +
+        0.114 * engineer.data[channel + 2],
+    );
+    shopLevels[pixel] = Math.round(
+      0.299 * shop.data[channel] +
+        0.587 * shop.data[channel + 1] +
+        0.114 * shop.data[channel + 2],
+    );
+  }
 
   for (let y = 0; y < engineer.height; y += 1) {
     for (let x = 0; x < engineer.width; x += 1) {
-      const pixel = (y * engineer.width + x) * 4;
-      const engineerLevel =
-        0.299 * engineerPixels[pixel] +
-        0.587 * engineerPixels[pixel + 1] +
-        0.114 * engineerPixels[pixel + 2];
-      let minimumShopLevel = 255;
-      let maximumShopLevel = 0;
+      const index = y * engineer.width + x;
+      const engineerLevel = engineerLevels[index];
+      const shopLevel = shopLevels[index];
+      let minimumShopLevel = shopLevel;
+      let maximumShopLevel = shopLevel;
+      let minimumEngineerLevel = engineerLevel;
+      let maximumEngineerLevel = engineerLevel;
 
-      for (let yOffset = -1; yOffset <= 1; yOffset += 1) {
+      for (
+        let yOffset = -LINE_WEIGHT_TOLERANCE_RADIUS;
+        yOffset <= LINE_WEIGHT_TOLERANCE_RADIUS;
+        yOffset += 1
+      ) {
         const neighborY = y + yOffset;
-        if (neighborY < 0 || neighborY >= shop.height) continue;
-        for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
+        if (neighborY < 0 || neighborY >= engineer.height) continue;
+        for (
+          let xOffset = -LINE_WEIGHT_TOLERANCE_RADIUS;
+          xOffset <= LINE_WEIGHT_TOLERANCE_RADIUS;
+          xOffset += 1
+        ) {
           const neighborX = x + xOffset;
-          if (neighborX < 0 || neighborX >= shop.width) continue;
-          const neighbor = (neighborY * shop.width + neighborX) * 4;
-          const shopLevel =
-            0.299 * shopPixels[neighbor] +
-            0.587 * shopPixels[neighbor + 1] +
-            0.114 * shopPixels[neighbor + 2];
-          minimumShopLevel = Math.min(minimumShopLevel, shopLevel);
-          maximumShopLevel = Math.max(maximumShopLevel, shopLevel);
+          if (neighborX < 0 || neighborX >= engineer.width) continue;
+          const neighbor = neighborY * engineer.width + neighborX;
+          minimumShopLevel = Math.min(minimumShopLevel, shopLevels[neighbor]);
+          maximumShopLevel = Math.max(maximumShopLevel, shopLevels[neighbor]);
+          minimumEngineerLevel = Math.min(
+            minimumEngineerLevel,
+            engineerLevels[neighbor],
+          );
+          maximumEngineerLevel = Math.max(
+            maximumEngineerLevel,
+            engineerLevels[neighbor],
+          );
         }
       }
 
       if (
         engineerLevel < minimumShopLevel - PIXEL_LEVEL_TOLERANCE ||
-        engineerLevel > maximumShopLevel + PIXEL_LEVEL_TOLERANCE
+        engineerLevel > maximumShopLevel + PIXEL_LEVEL_TOLERANCE ||
+        shopLevel < minimumEngineerLevel - PIXEL_LEVEL_TOLERANCE ||
+        shopLevel > maximumEngineerLevel + PIXEL_LEVEL_TOLERANCE
       ) {
         const tile = Math.floor(y / TILE_SIZE) * columns + Math.floor(x / TILE_SIZE);
         tileCounts[tile] += 1;
@@ -744,6 +869,7 @@ async function createMarkedPdf(
   const drawing = await pdf.embedPng(alignedShopCanvas.toDataURL("image/png"));
   const font = await pdf.embedFont(StandardFonts.HelveticaBold);
   const red = rgb(0.82, 0.12, 0.12);
+  const muted = rgb(0.32, 0.39, 0.44);
 
   page.drawImage(drawing, {
     x: 0,
@@ -767,10 +893,33 @@ async function createMarkedPdf(
       width: Math.min(pageWidth - rectangleX, x + width + inset - rectangleX),
       height: Math.min(pageHeight - rectangleY, y + height + inset - rectangleY),
       color: red,
-      opacity: 0.16,
+      opacity: 0.08,
       borderColor: red,
-      borderWidth: 1.5,
+      borderWidth: 0.8,
     });
+
+    const cloudRadius = 4;
+    const cloudSpacing = 18;
+    const cloudPoints: Array<{ x: number; y: number }> = [];
+    for (let cloudX = rectangleX; cloudX <= rectangleX + width; cloudX += cloudSpacing) {
+      cloudPoints.push({ x: cloudX, y: rectangleY });
+      cloudPoints.push({ x: cloudX, y: rectangleY + height });
+    }
+    for (let cloudY = rectangleY; cloudY <= rectangleY + height; cloudY += cloudSpacing) {
+      cloudPoints.push({ x: rectangleX, y: cloudY });
+      cloudPoints.push({ x: rectangleX + width, y: cloudY });
+    }
+    cloudPoints.forEach((point) => {
+      page.drawEllipse({
+        x: Math.max(cloudRadius, Math.min(pageWidth - cloudRadius, point.x)),
+        y: Math.max(cloudRadius, Math.min(pageHeight - cloudRadius, point.y)),
+        xScale: cloudRadius,
+        yScale: cloudRadius,
+        borderColor: red,
+        borderWidth: 1.2,
+      });
+    });
+
     page.drawText(`DIFF ${region.id}`, {
       x: Math.max(0, x),
       y: Math.min(pageHeight - 10, y + height + 3),
@@ -789,6 +938,70 @@ async function createMarkedPdf(
       color: red,
     });
   }
+
+  const summaryPage = pdf.addPage([pageWidth, pageHeight]);
+  summaryPage.drawText("VISUAL REVIEW FINDINGS", {
+    x: 28,
+    y: pageHeight - 36,
+    size: 15,
+    font,
+    color: muted,
+  });
+  summaryPage.drawText(
+    "Visual candidates for EOR review — not engineering conclusions.",
+    {
+      x: 28,
+      y: pageHeight - 56,
+      size: 9,
+      color: muted,
+    },
+  );
+  summaryPage.drawText(
+    `${regions.length} candidate region${regions.length === 1 ? "" : "s"} detected on the selected page.`,
+    {
+      x: 28,
+      y: pageHeight - 78,
+      size: 10,
+      font,
+      color: muted,
+    },
+  );
+
+  if (regions.length === 0) {
+    summaryPage.drawText(
+      "No visual candidates exceeded the comparison threshold.",
+      { x: 28, y: pageHeight - 112, size: 10, color: muted },
+    );
+  } else {
+    regions.forEach((region, index) => {
+      const y = pageHeight - 112 - index * 24;
+      if (y < 36) return;
+      summaryPage.drawText(`DIFF ${region.id}`, {
+        x: 28,
+        y,
+        size: 10,
+        font,
+        color: red,
+      });
+      summaryPage.drawText(
+        `Visual candidate at x ${Math.round(region.x)}, y ${Math.round(region.y)} ` +
+          `(${Math.round(region.width)} × ${Math.round(region.height)} px); ` +
+          `${region.changedPixels} changed pixels.`,
+        { x: 82, y, size: 8, color: muted },
+      );
+    });
+  }
+
+  summaryPage.drawText(
+    "Verify each cloud against both source sheets at higher resolution. " +
+      "Unreadable or ambiguous conditions should be recorded as verify findings.",
+    {
+      x: 28,
+      y: 24,
+      size: 8,
+      color: muted,
+    },
+  );
 
   return pdf.save();
 }
@@ -982,7 +1195,107 @@ export async function comparePdfPages(
     gridFallbackReason: grid.reason,
   };
 
-  const engineerContext = engineer.canvas.getContext("2d", {
+  return {
+    engineerCanvas,
+    autoAlignedShopCanvas: alignedShopCanvas,
+    engineerPreview: engineerCanvas.toDataURL("image/png"),
+    shopPreview: alignedShopCanvas.toDataURL("image/png"),
+    width: engineerCanvas.width,
+    height: engineerCanvas.height,
+    registration,
+    engineerPageCount: engineer.pageCount,
+    shopPageCount: shop.pageCount,
+    engineerPageNumber,
+    shopPageNumber,
+    engineerPageWidth: pageWidth,
+    engineerPageHeight: pageHeight,
+  };
+}
+
+function applyManualAlignment(
+  engineerSource: HTMLCanvasElement,
+  shopSource: HTMLCanvasElement,
+  alignment: ManualAlignment,
+): { engineerCanvas: HTMLCanvasElement; shopCanvas: HTMLCanvasElement } {
+  if (
+    !Number.isFinite(alignment.offsetX) ||
+    !Number.isFinite(alignment.offsetY) ||
+    !Number.isFinite(alignment.scale) ||
+    alignment.scale <= 0 ||
+    !Number.isFinite(alignment.rotationDegrees)
+  ) {
+    throw new Error("Enter valid manual alignment adjustments.");
+  }
+
+  const centerX = shopSource.width / 2;
+  const centerY = shopSource.height / 2;
+  const radians = (alignment.rotationDegrees * Math.PI) / 180;
+  const a = Math.cos(radians) * alignment.scale;
+  const b = Math.sin(radians) * alignment.scale;
+  const c = -Math.sin(radians) * alignment.scale;
+  const d = Math.cos(radians) * alignment.scale;
+  const transformPoint = (x: number, y: number) => ({
+    x: centerX + alignment.offsetX + a * (x - centerX) + c * (y - centerY),
+    y: centerY + alignment.offsetY + b * (x - centerX) + d * (y - centerY),
+  });
+  const transformedCorners = [
+    transformPoint(0, 0),
+    transformPoint(shopSource.width, 0),
+    transformPoint(0, shopSource.height),
+    transformPoint(shopSource.width, shopSource.height),
+  ];
+  const minimumX = Math.min(0, ...transformedCorners.map(({ x }) => x));
+  const minimumY = Math.min(0, ...transformedCorners.map(({ y }) => y));
+  const outputWidth = Math.ceil(
+    Math.max(engineerSource.width, ...transformedCorners.map(({ x }) => x)) -
+      minimumX,
+  );
+  const outputHeight = Math.ceil(
+    Math.max(engineerSource.height, ...transformedCorners.map(({ y }) => y)) -
+      minimumY,
+  );
+  const engineerCanvas = window.document.createElement("canvas");
+  const shopCanvas = window.document.createElement("canvas");
+  for (const canvas of [engineerCanvas, shopCanvas]) {
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
+  }
+  const engineerContext = engineerCanvas.getContext("2d", {
+    willReadFrequently: true,
+  });
+  const shopContext = shopCanvas.getContext("2d", { willReadFrequently: true });
+  if (!engineerContext || !shopContext) {
+    throw new Error("This browser could not create canvases for manual alignment.");
+  }
+
+  engineerContext.fillStyle = "#fff";
+  engineerContext.fillRect(0, 0, outputWidth, outputHeight);
+  engineerContext.drawImage(engineerSource, -minimumX, -minimumY);
+
+  shopContext.fillStyle = "#fff";
+  shopContext.fillRect(0, 0, outputWidth, outputHeight);
+  shopContext.setTransform(
+    a,
+    b,
+    c,
+    d,
+    centerX + alignment.offsetX - a * centerX - c * centerY - minimumX,
+    centerY + alignment.offsetY - b * centerX - d * centerY - minimumY,
+  );
+  shopContext.drawImage(shopSource, 0, 0);
+  return { engineerCanvas, shopCanvas };
+}
+
+export async function compareAlignedPdfPages(
+  alignment: PdfAlignment,
+  manualAlignment: ManualAlignment,
+): Promise<PdfComparison> {
+  const { engineerCanvas, shopCanvas: alignedShopCanvas } = applyManualAlignment(
+    alignment.engineerCanvas,
+    alignment.autoAlignedShopCanvas,
+    manualAlignment,
+  );
+  const engineerContext = engineerCanvas.getContext("2d", {
     willReadFrequently: true,
   });
   const alignedShopContext = alignedShopCanvas.getContext("2d", {
@@ -993,7 +1306,12 @@ export async function comparePdfPages(
   }
 
   const regions = findDifferenceRegions(
-    engineerContext.getImageData(0, 0, engineer.canvas.width, engineer.canvas.height),
+    engineerContext.getImageData(
+      0,
+      0,
+      engineerCanvas.width,
+      engineerCanvas.height,
+    ),
     alignedShopContext.getImageData(
       0,
       0,
@@ -1001,28 +1319,63 @@ export async function comparePdfPages(
       alignedShopCanvas.height,
     ),
   );
-  const markedPdf = await createMarkedPdf(
-    alignedShopCanvas,
-    regions,
-    alignedShopCanvas.width,
-    alignedShopCanvas.height,
-    engineer.pageWidth,
-    engineer.pageHeight,
-  );
+  const [engineerMarkedPdf, markedPdf] = await Promise.all([
+    createMarkedPdf(
+      engineerCanvas,
+      regions,
+      engineerCanvas.width,
+      engineerCanvas.height,
+      alignment.engineerPageWidth * (engineerCanvas.width / alignment.width),
+      alignment.engineerPageHeight * (engineerCanvas.height / alignment.height),
+    ),
+    createMarkedPdf(
+      alignedShopCanvas,
+      regions,
+      alignedShopCanvas.width,
+      alignedShopCanvas.height,
+      alignment.engineerPageWidth * (engineerCanvas.width / alignment.width),
+      alignment.engineerPageHeight * (engineerCanvas.height / alignment.height),
+    ),
+  ]);
 
   return {
-    engineerPreview: engineer.canvas.toDataURL("image/png"),
+    engineerPreview: engineerCanvas.toDataURL("image/png"),
     shopPreview: alignedShopCanvas.toDataURL("image/png"),
     width: alignedShopCanvas.width,
     height: alignedShopCanvas.height,
-    registration,
-    engineerPageCount: engineer.pageCount,
-    shopPageCount: shop.pageCount,
-    engineerPageNumber,
-    shopPageNumber,
+    registration: alignment.registration,
+    engineerPageCount: alignment.engineerPageCount,
+    shopPageCount: alignment.shopPageCount,
+    engineerPageNumber: alignment.engineerPageNumber,
+    shopPageNumber: alignment.shopPageNumber,
     regions,
+    engineerMarkedPdf,
     markedPdf,
   };
+}
+
+export async function comparePdfPages(
+  engineerFile: File,
+  shopFile: File,
+  engineerPageNumber: number,
+  shopPageNumber: number,
+  engineerScaleDenominator: number,
+  shopScaleDenominator: number,
+): Promise<PdfComparison> {
+  const alignment = await preparePdfAlignment(
+    engineerFile,
+    shopFile,
+    engineerPageNumber,
+    shopPageNumber,
+    engineerScaleDenominator,
+    shopScaleDenominator,
+  );
+  return compareAlignedPdfPages(alignment, {
+    offsetX: 0,
+    offsetY: 0,
+    scale: 1,
+    rotationDegrees: 0,
+  });
 }
 
 export function comparePdfFirstPages(

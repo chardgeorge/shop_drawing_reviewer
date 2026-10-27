@@ -1,9 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent, DragEvent, ReactNode } from "react";
-import { comparePdfFirstPages } from "@/lib/pdf-compare";
-import type { PdfComparison } from "@/lib/pdf-compare";
+import type {
+  ChangeEvent,
+  Dispatch,
+  DragEvent,
+  ReactNode,
+  SetStateAction,
+} from "react";
+import VisualComparison from "@/components/visual-comparison";
 
 type DrawingSide = "engineering" | "shop";
 type DrawingFile = {
@@ -11,9 +16,456 @@ type DrawingFile = {
   file: File;
 };
 
-type ComparisonDisplay = Omit<PdfComparison, "markedPdf"> & {
-  markedPdfUrl: string;
+type ExtractedDocument = {
+  id: string;
+  role: "engineer" | "shop";
+  file_name: string;
+  status: "uploaded" | "queued" | "processing" | "ready" | "needs_review" | "failed";
+  extraction: {
+    id: string;
+    status: string;
+    page_count: number | null;
+    diagnostics: {
+      warnings?: { code: string; message: string }[];
+      schedule_row_count?: number;
+    };
+    error_code: string | null;
+    error_message: string | null;
+  } | null;
 };
+
+type BeamRow = {
+  id: string;
+  member_mark_raw: string | null;
+  section_raw: string | null;
+  member_mark: string | null;
+  section: string | null;
+  page_number: number;
+  source_bbox: { x0: number; y0: number; x1: number; y1: number } | null;
+  confidence: number | null;
+  review_state: "needs_review" | "accepted" | "rejected";
+};
+
+function createDemoRows(): BeamRow[] {
+  return [
+    {
+      id: "demo-row-1",
+      member_mark_raw: "B1",
+      section_raw: "W12x26",
+      member_mark: "B1",
+      section: "W12x26",
+      page_number: 1,
+      source_bbox: { x0: 72, y0: 118, x1: 290, y1: 134 },
+      confidence: 0.96,
+      review_state: "needs_review",
+    },
+    {
+      id: "demo-row-2",
+      member_mark_raw: "B2",
+      section_raw: "W14x30",
+      member_mark: "B2",
+      section: "W14x30",
+      page_number: 1,
+      source_bbox: { x0: 72, y0: 148, x1: 290, y1: 164 },
+      confidence: 0.91,
+      review_state: "needs_review",
+    },
+    {
+      id: "demo-row-3",
+      member_mark_raw: "B3",
+      section_raw: "W16x36",
+      member_mark: "B3",
+      section: "W16x36",
+      page_number: 1,
+      source_bbox: { x0: 72, y0: 178, x1: 290, y1: 194 },
+      confidence: 0.84,
+      review_state: "needs_review",
+    },
+  ];
+}
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const DEMO_PROJECT_ID = "demo-project";
+
+function createDemoDocuments(): ExtractedDocument[] {
+  return [
+    {
+      id: "demo-engineer-document",
+      role: "engineer",
+      file_name: "engineer-beam-schedule.pdf",
+      status: "ready",
+      extraction: {
+        id: "demo-engineer-extraction",
+        status: "completed",
+        page_count: 2,
+        diagnostics: { schedule_row_count: 3 },
+        error_code: null,
+        error_message: null,
+      },
+    },
+    {
+      id: "demo-shop-document",
+      role: "shop",
+      file_name: "shop-drawing-schedule.pdf",
+      status: "needs_review",
+      extraction: {
+        id: "demo-shop-extraction",
+        status: "completed",
+        page_count: 1,
+        diagnostics: {
+          schedule_row_count: 3,
+          warnings: [
+            {
+              code: "DEMO_REVIEW",
+              message: "Demo data only: review the extracted values before comparison.",
+            },
+          ],
+        },
+        error_code: null,
+        error_message: null,
+      },
+    },
+  ];
+}
+
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as
+      | { detail?: string }
+      | null;
+    throw new Error(body?.detail ?? `Request failed (${response.status}).`);
+  }
+  return (await response.json()) as T;
+}
+
+function ReviewWorkspace({
+  projectId,
+  documents,
+  sourceFiles,
+  onDocumentsChange,
+  onBack,
+  demoMode = false,
+}: {
+  projectId: string;
+  documents: ExtractedDocument[];
+  sourceFiles: Record<DrawingSide, DrawingFile[]>;
+  onDocumentsChange: Dispatch<SetStateAction<ExtractedDocument[]>>;
+  onBack: () => void;
+  demoMode?: boolean;
+}) {
+  const [selectedDocumentId, setSelectedDocumentId] = useState(documents[0]?.id ?? "");
+  const [rows, setRows] = useState<BeamRow[]>(() => (demoMode ? createDemoRows() : []));
+  const [drafts, setDrafts] = useState<Record<string, { member_mark: string; section: string }>>({});
+  const [selectedPage, setSelectedPage] = useState(1);
+  const [error, setError] = useState("");
+  const [savingRowId, setSavingRowId] = useState("");
+  const [engineerRows, setEngineerRows] = useState<BeamRow[]>([]);
+  const [shopRows, setShopRows] = useState<BeamRow[]>([]);
+
+  const selectedDocument = documents.find((document) => document.id === selectedDocumentId);
+  const extractionId = selectedDocument?.extraction?.id;
+  const engineerDocument = documents.find((document) => document.role === "engineer");
+  const shopDocument = documents.find((document) => document.role === "shop");
+
+  const previewUrls = useMemo(() => {
+    if (!demoMode) return {};
+    return {
+      engineer: sourceFiles.engineering[0]
+        ? URL.createObjectURL(sourceFiles.engineering[0].file)
+        : "",
+      shop: sourceFiles.shop[0]
+        ? URL.createObjectURL(sourceFiles.shop[0].file)
+        : "",
+    };
+  }, [demoMode, sourceFiles]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(previewUrls).forEach((url) => {
+        if (url) URL.revokeObjectURL(url);
+      });
+    };
+  }, [previewUrls]);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      try {
+        const latest = await Promise.all(
+          documents.map((document) =>
+            requestJson<ExtractedDocument>(`/api/v1/documents/${document.id}`),
+          ),
+        );
+        if (active) onDocumentsChange(latest);
+      } catch (requestError) {
+        if (active) setError((requestError as Error).message);
+      }
+    };
+    const pending = !demoMode && documents.some(
+      (document) => document.status === "queued" || document.status === "processing",
+    );
+    if (!pending) return;
+    const timer = window.setInterval(refresh, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [documents, onDocumentsChange]);
+
+  useEffect(() => {
+    let active = true;
+    if (demoMode) {
+      setRows(createDemoRows());
+      return;
+    }
+    setRows([]);
+    if (!selectedDocument || !extractionId || selectedDocument.extraction?.status !== "completed") {
+      return;
+    }
+
+    requestJson<{ items: BeamRow[] }>(
+      `/api/v1/documents/${selectedDocument.id}/extraction-runs/${extractionId}/beam-rows`,
+    )
+      .then((response) => {
+        if (active) {
+          setRows(response.items);
+          setSelectedPage(response.items[0]?.page_number ?? 1);
+        }
+      })
+      .catch((requestError: Error) => {
+        if (active) setError(requestError.message);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedDocument, extractionId]);
+
+  useEffect(() => {
+    let active = true;
+    if (demoMode) {
+      const demoRows = createDemoRows();
+      setEngineerRows(demoRows);
+      setShopRows(
+        demoRows.map((row, index) =>
+          index === 1
+            ? { ...row, id: "demo-shop-row-2", section: "W16x36", section_raw: "W16x36" }
+            : { ...row, id: `demo-shop-${index + 1}` },
+        ),
+      );
+      return;
+    }
+
+    const loadRows = async (
+      document: ExtractedDocument | undefined,
+      setDocumentRows: (rows: BeamRow[]) => void,
+    ) => {
+      if (!document?.extraction?.id || document.extraction.status !== "completed") {
+        setDocumentRows([]);
+        return;
+      }
+      const response = await requestJson<{ items: BeamRow[] }>(
+        `/api/v1/documents/${document.id}/extraction-runs/${document.extraction.id}/beam-rows`,
+      );
+      if (active) setDocumentRows(response.items);
+    };
+
+    Promise.all([
+      loadRows(engineerDocument, setEngineerRows),
+      loadRows(shopDocument, setShopRows),
+    ]).catch((requestError: Error) => {
+      if (active) setError(requestError.message);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [demoMode, engineerDocument, shopDocument]);
+
+  async function updateRow(
+    row: BeamRow,
+    update: { review_state?: BeamRow["review_state"]; member_mark?: string; section?: string },
+  ) {
+    setSavingRowId(row.id);
+    setError("");
+    try {
+      if (demoMode) {
+        const applyUpdate = (items: BeamRow[]) =>
+          items.map((item) =>
+            item.id === row.id
+              ? {
+                  ...item,
+                  ...update,
+                  member_mark: update.member_mark ?? item.member_mark,
+                  section: update.section ?? item.section,
+                }
+              : item,
+          );
+        setRows(applyUpdate);
+        setShopRows(applyUpdate);
+        return;
+      }
+      const updated = await requestJson<BeamRow>(`/api/v1/beam-rows/${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(update),
+      });
+      setRows((current) => current.map((item) => (item.id === row.id ? updated : item)));
+      setShopRows((current) =>
+        current.map((item) => (item.id === row.id ? updated : item)),
+      );
+      const latestDocument = await requestJson<ExtractedDocument>(
+        `/api/v1/documents/${selectedDocumentId}`,
+      );
+      onDocumentsChange((current) =>
+        current.map((item) =>
+          item.id === latestDocument.id ? latestDocument : item,
+        ),
+      );
+      setDrafts((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    } finally {
+      setSavingRowId("");
+    }
+  }
+
+  const viewerPage = selectedPage || rows[0]?.page_number || 1;
+  const viewerUrl = selectedDocument
+    ? `${API_BASE_URL}/api/v1/documents/${selectedDocument.id}/file#page=${viewerPage}`
+    : "";
+
+  return (
+    <section className="review-workspace" aria-labelledby="review-heading">
+      <div className="review-heading-row">
+        <div>
+          <div className="section-kicker"><span className="kicker-line" />EXTRACTION REVIEW</div>
+          <h1 id="review-heading">Review extracted beam schedules</h1>
+          <p className="intro-copy">Check each extracted value against its source PDF before using it.</p>
+        </div>
+        <div className="review-heading-actions">
+          {demoMode && <span className="demo-badge">DEMO DATA</span>}
+          <button className="browse-button" type="button" onClick={onBack}>Back to documents</button>
+        </div>
+      </div>
+      <div className="review-document-tabs" aria-label="Uploaded documents">
+        {documents.map((document) => (
+          <button
+            className={`review-document-tab ${selectedDocumentId === document.id ? "is-selected" : ""}`}
+            key={document.id}
+            type="button"
+            onClick={() => setSelectedDocumentId(document.id)}
+          >
+            <span>{document.role === "engineer" ? "Engineer" : "Shop"} · {document.file_name}</span>
+            <small>{document.status.replace("_", " ")}</small>
+          </button>
+        ))}
+      </div>
+      <VisualComparison
+        engineeringFiles={sourceFiles.engineering}
+        shopFiles={sourceFiles.shop}
+      />
+      {error && <p className="notice-message" role="alert">{error}</p>}
+      {selectedDocument?.status === "queued" || selectedDocument?.status === "processing" ? (
+        <div className="review-empty" role="status">PDF extraction is in progress. This view refreshes automatically.</div>
+      ) : selectedDocument?.status === "failed" ? (
+        <div className="notice-message" role="alert">
+          Extraction failed{selectedDocument.extraction?.error_code ? ` (${selectedDocument.extraction.error_code})` : ""}: {selectedDocument.extraction?.error_message ?? "See backend logs for details."}
+        </div>
+      ) : selectedDocument ? (
+        <>
+          {selectedDocument.extraction?.diagnostics.warnings?.map((warning, index) => (
+            <div className="notice-message" key={`${warning.code}-${index}`}>{warning.message}</div>
+          ))}
+          <div className="comparison-pdf-grid">
+            {(["engineer", "shop"] as const).map((role) => {
+              const document = role === "engineer" ? engineerDocument : shopDocument;
+              const fileUrl = previewUrls[role];
+              const backendUrl = document
+                ? `${API_BASE_URL}/api/v1/documents/${document.id}/file#page=${viewerPage}`
+                : "";
+              const isShop = role === "shop";
+              return (
+                <div className={`comparison-pdf-panel ${isShop && shopRows.length > 0 ? "has-discrepancies" : ""}`} key={role}>
+                  <div className="review-panel-heading">
+                    <strong>{isShop ? "Shop drawing PDF" : "Engineer PDF"}</strong>
+                    <span>{document?.file_name ?? "No document"}</span>
+                  </div>
+                  {demoMode && fileUrl ? (
+                    <iframe title={`${role} PDF preview`} src={`${fileUrl}#page=${viewerPage}`} />
+                  ) : demoMode ? (
+                    <div className="demo-pdf">
+                      <div className="demo-pdf-page">
+                        <strong>{isShop ? "Shop drawing schedule" : "Engineer beam schedule"}</strong>
+                        <span>Page {viewerPage}</span>
+                        <div className="demo-pdf-lines" aria-hidden="true">
+                          <span />
+                          <span />
+                          <span />
+                          <span />
+                        </div>
+                        <p>{isShop ? "Discrepancies are highlighted below." : "Reference design values."}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <iframe title={`${role} PDF: ${document?.file_name ?? role}`} src={backendUrl} />
+                  )}
+                  {isShop && shopRows.length > 0 && (
+                    <div className="pdf-discrepancy-ribbon">Discrepancies highlighted below</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <section className="discrepancy-panel" aria-labelledby="discrepancy-heading">
+            <div className="review-panel-heading">
+              <strong id="discrepancy-heading">Review discrepancies</strong>
+              <span>{shopRows.filter((shopRow) => {
+                const engineerRow = engineerRows.find((row) => row.member_mark === shopRow.member_mark);
+                return engineerRow && engineerRow.section !== shopRow.section;
+              }).length} found</span>
+            </div>
+            <div className="discrepancy-list">
+              {shopRows.map((shopRow) => {
+                const engineerRow = engineerRows.find((row) => row.member_mark === shopRow.member_mark);
+                const mismatch = engineerRow && engineerRow.section !== shopRow.section;
+                if (!mismatch) return null;
+                return (
+                  <article className="discrepancy-card" key={shopRow.id}>
+                    <div className="discrepancy-card-heading">
+                      <strong>{shopRow.member_mark}</strong>
+                      <span>Page {shopRow.page_number} · Shop drawing highlighted</span>
+                    </div>
+                    <div className="discrepancy-values">
+                      <span><small>Engineer</small>{engineerRow.section}</span>
+                      <span><small>Shop drawing</small><mark>{shopRow.section}</mark></span>
+                    </div>
+                    <p>Section size differs from the engineer-issued reference. Confirm the shop drawing before accepting.</p>
+                    <div className="schedule-row-actions">
+                      <button type="button" onClick={() => setSelectedPage(shopRow.page_number)}>View source</button>
+                      <button type="button" onClick={() => updateRow(shopRow, { review_state: "accepted" })}>Accept discrepancy</button>
+                    </div>
+                  </article>
+                );
+              })}
+              {shopRows.length > 0 && !shopRows.some((shopRow) => {
+                const engineerRow = engineerRows.find((row) => row.member_mark === shopRow.member_mark);
+                return engineerRow && engineerRow.section !== shopRow.section;
+              }) && <div className="review-empty">No section discrepancies were found.</div>}
+            </div>
+          </section>
+        </>
+      ) : (
+        <div className="review-empty">No document selected for project {projectId}.</div>
+      )}
+    </section>
+  );
+}
 
 const SIDE_COPY: Record<
   DrawingSide,
@@ -150,8 +602,11 @@ export default function UploadWorkspace() {
   });
   const [dragging, setDragging] = useState<DrawingSide | null>(null);
   const [notice, setNotice] = useState("");
-  const [comparison, setComparison] = useState<ComparisonDisplay | null>(null);
-  const [isComparing, setIsComparing] = useState(false);
+  const [projectName, setProjectName] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
+  const [reviewProjectId, setReviewProjectId] = useState("");
+  const [uploadedDocuments, setUploadedDocuments] = useState<ExtractedDocument[]>([]);
+  const [demoMode, setDemoMode] = useState(false);
   const engineeringInput = useRef<HTMLInputElement>(null);
   const shopInput = useRef<HTMLInputElement>(null);
 
@@ -166,10 +621,63 @@ export default function UploadWorkspace() {
     [files],
   );
 
-  useEffect(() => {
-    if (!comparison) return;
-    return () => URL.revokeObjectURL(comparison.markedPdfUrl);
-  }, [comparison]);
+  function openDemoReview() {
+    setDemoMode(true);
+    setReviewProjectId(DEMO_PROJECT_ID);
+    setUploadedDocuments(createDemoDocuments());
+    setNotice("");
+  }
+
+  async function beginReview() {
+    setIsUploading(true);
+    setNotice("");
+    try {
+      const project = await requestJson<{ id: string }>("/api/v1/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: projectName.trim() || `Local drawing review ${new Date().toLocaleDateString()}`,
+        }),
+      });
+
+      const uploaded: ExtractedDocument[] = [];
+      for (const [side, role] of [
+        ["engineering", "engineer"],
+        ["shop", "shop"],
+      ] as const) {
+        for (const item of files[side]) {
+          const form = new FormData();
+          form.append("role", role);
+          form.append("file", item.file);
+          form.append(
+            "document_type",
+            role === "engineer" ? "general_arrangement" : "shop_drawing",
+          );
+          uploaded.push(
+            await requestJson<ExtractedDocument>(
+              `/api/v1/projects/${project.id}/documents`,
+              { method: "POST", body: form },
+            ),
+          );
+        }
+      }
+
+      setReviewProjectId(project.id);
+      setUploadedDocuments(uploaded);
+    } catch (requestError) {
+      const message = (requestError as Error).message;
+      if (message.includes("Failed to fetch")) {
+        openDemoReview();
+        setNotice(
+          "Backend is not running, so the prototype opened a clearly labeled demo review with sample extracted rows.",
+        );
+      } else {
+        setNotice(message);
+      }
+    } finally {
+      setIsUploading(false);
+    }
+  }
 
   function addFiles(side: DrawingSide, selected: FileList | File[]) {
     const accepted: DrawingFile[] = [];
@@ -196,7 +704,6 @@ export default function UploadWorkspace() {
     }
 
     if (accepted.length > 0) {
-      setComparison(null);
       setFiles((current) => ({
         ...current,
         [side]: [
@@ -221,41 +728,10 @@ export default function UploadWorkspace() {
   }
 
   function removeFile(side: DrawingSide, id: string) {
-    setComparison(null);
     setFiles((current) => ({
       ...current,
       [side]: current[side].filter((item) => item.id !== id),
     }));
-  }
-
-  async function compareDrawings() {
-    const engineerFile = files.engineering[0]?.file;
-    const shopFile = files.shop[0]?.file;
-    if (!engineerFile || !shopFile) return;
-
-    setIsComparing(true);
-    setNotice("");
-    setComparison(null);
-    try {
-      const result = await comparePdfFirstPages(engineerFile, shopFile);
-      const pdfBuffer = new ArrayBuffer(result.markedPdf.byteLength);
-      new Uint8Array(pdfBuffer).set(result.markedPdf);
-      const markedPdfUrl = URL.createObjectURL(
-        new Blob([pdfBuffer], { type: "application/pdf" }),
-      );
-      setComparison({
-        ...result,
-        markedPdfUrl,
-      });
-    } catch (error) {
-      setNotice(
-        error instanceof Error
-          ? error.message
-          : "The PDF comparison failed unexpectedly.",
-      );
-    } finally {
-      setIsComparing(false);
-    }
   }
 
   function getInput(side: DrawingSide) {
@@ -360,6 +836,41 @@ export default function UploadWorkspace() {
           </div>
         )}
       </section>
+    );
+  }
+
+  if (reviewProjectId) {
+    return (
+      <div className="app-shell">
+        <aside className="sidebar">
+          <a className="brand" href="#" aria-label="Shop Drawing Reviewer home">
+            <span className="brand-mark"><Icon name="logo" size={22} /></span>
+            <span className="brand-copy"><strong>shopcheck</strong><span>STRUCTURAL REVIEW</span></span>
+          </a>
+          <div className="workspace-label">WORKSPACE</div>
+          <nav className="sidebar-nav" aria-label="Main navigation">
+            <a className="nav-item active" href="#review"><Icon name="grid" /><span>New review</span></a>
+          </nav>
+          <div className="sidebar-bottom">
+            <div className="sidebar-help"><span className="help-mark"><Icon name="shield" size={18} /></span><div><strong>Built for engineering review</strong><p>Your judgment stays in control.</p></div></div>
+            <button className="profile-button" type="button" aria-label="Account settings"><span className="avatar">GE</span><span className="profile-copy"><strong>Guest engineer</strong><span>Local preview</span></span><Icon name="settings" size={18} /></button>
+          </div>
+        </aside>
+        <main className="main-content" id="review">
+          <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span className="breadcrumb-divider">/</span><strong>Extraction review</strong></div><div className="topbar-status"><span className="status-dot" />Local review</div></header>
+          <div className="content-wrap">
+            <ReviewWorkspace
+              projectId={reviewProjectId}
+              documents={uploadedDocuments}
+              sourceFiles={files}
+              onDocumentsChange={setUploadedDocuments}
+              onBack={() => setReviewProjectId("")}
+              demoMode={demoMode}
+            />
+            <div className="prototype-note"><span className="prototype-indicator" /><span>PDFs are stored on this machine and are not sent to external AI services.</span></div>
+          </div>
+        </main>
+      </div>
     );
   }
 
@@ -469,6 +980,8 @@ export default function UploadWorkspace() {
                 type="text"
                 placeholder="e.g. North Plant — Structural Steel"
                 maxLength={120}
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
               />
               <span className="project-input-hint">A name helps you find this review later</span>
             </div>
@@ -481,6 +994,11 @@ export default function UploadWorkspace() {
             </div>
             {renderPanel("shop")}
           </div>
+
+          <VisualComparison
+            engineeringFiles={files.engineering}
+            shopFiles={files.shop}
+          />
 
           {notice && (
             <p className="notice-message" role="alert">
@@ -496,124 +1014,27 @@ export default function UploadWorkspace() {
               <span>
                 {totalFiles > 0
                   ? `${totalFiles} PDF${totalFiles === 1 ? "" : "s"} selected · ${formatBytes(totalSize)} total`
-                  : "Files stay in this browser in preview mode."}
+                  : "PDFs upload only to the local backend."}
               </span>
             </div>
             <button
               className="continue-button"
               type="button"
-              disabled={!isReady || isComparing}
-              onClick={compareDrawings}
+              disabled={!isReady || isUploading}
+              onClick={beginReview}
             >
-              {isComparing ? "Comparing PDFs..." : "Compare first pages"}
-              {!isComparing && <Icon name="arrow" size={18} />}
+              {isUploading ? "Uploading…" : "Continue"}
+              <Icon name="arrow" size={18} />
+            </button>
+            <button className="demo-button" type="button" onClick={openDemoReview}>
+              Open demo data
             </button>
           </div>
-
-          {comparison && (
-            <section className="comparison-result" aria-labelledby="comparison-heading">
-              <div className="comparison-result-heading">
-                <div>
-                  <span className="section-kicker">
-                    <span className="kicker-line" />
-                    VISUAL REVIEW
-                  </span>
-                  <h2 id="comparison-heading">
-                    {comparison.regions.length === 0
-                      ? "No candidate changes detected"
-                      : `${comparison.regions.length} visual change region${comparison.regions.length === 1 ? "" : "s"} found`}
-                  </h2>
-                  <p>
-                    Pixel-difference candidates are highlighted on the shop drawing.
-                    Review each one; they are not engineering conclusions.
-                  </p>
-                </div>
-                <a
-                  className="marked-pdf-link"
-                  href={comparison.markedPdfUrl}
-                  download={`${files.shop[0]?.file.name.replace(/\.pdf$/i, "") ?? "shop-drawing"}-marked-up.pdf`}
-                >
-                  Download aligned markup · page 1
-                  <Icon name="arrow" size={16} />
-                </a>
-              </div>
-
-              <p className="registration-summary">
-                Auto-aligned with {comparison.registration.inliers} matching
-                features ({Math.round(comparison.registration.inlierPercent * 100)}%
-                of accepted matches), {comparison.registration.scale.toFixed(3)}×
-                scale, {comparison.registration.rotationDegrees.toFixed(1)}°
-                rotation, {comparison.registration.reprojectionError.toFixed(2)} px
-                residual.
-              </p>
-              {(comparison.engineerPageCount > 1 || comparison.shopPageCount > 1) && (
-                <p className="comparison-caveat">
-                  Only page 1 was compared. Additional pages are not analyzed or
-                  included in the exported PDF.
-                </p>
-              )}
-              <p className="comparison-caveat">
-                Automatic alignment estimates scale, rotation, and position from
-                shared visual features. Review the overlay: alignment can still be
-                wrong, and highlights can include text or revision differences or
-                miss real discrepancies. The download is a rasterized aligned view,
-                not an engineering approval or a substitute for the originals.
-              </p>
-
-              <div className="comparison-previews">
-                <figure className="comparison-preview">
-                  <figcaption>Engineer-issued · page 1</figcaption>
-                  <img
-                    src={comparison.engineerPreview}
-                    alt="Rendered first page of the engineer-issued drawing"
-                  />
-                </figure>
-                <figure className="comparison-preview">
-                  <figcaption>Shop drawing · highlighted candidates</figcaption>
-                  <div className="comparison-image-wrap">
-                    <img
-                      src={comparison.shopPreview}
-                      alt="Rendered first page of the shop drawing"
-                    />
-                    <svg
-                      className="difference-overlay"
-                      viewBox={`0 0 ${comparison.width} ${comparison.height}`}
-                      preserveAspectRatio="none"
-                      aria-hidden="true"
-                    >
-                      {comparison.regions.map((region) => (
-                        <g key={region.id}>
-                          <rect
-                            x={region.x}
-                            y={region.y}
-                            width={region.width}
-                            height={region.height}
-                            fill="rgba(220, 48, 48, 0.16)"
-                            stroke="#cf3030"
-                            strokeWidth={2}
-                          />
-                          <text
-                            x={region.x + 3}
-                            y={Math.max(14, region.y - 3)}
-                            fill="#a71f1f"
-                            fontSize={13}
-                            fontWeight="bold"
-                          >
-                            {region.id}
-                          </text>
-                        </g>
-                      ))}
-                    </svg>
-                  </div>
-                </figure>
-              </div>
-            </section>
-          )}
 
           <div className="prototype-note">
             <span className="prototype-indicator" />
             <span>
-              Local comparison mode — selected PDFs stay in your browser and are not uploaded.
+              Local prototype — PDFs upload to the local backend and stay outside Git.
             </span>
           </div>
         </div>

@@ -27,6 +27,8 @@ export type PdfComparison = {
   registration: RegistrationSummary;
   engineerPageCount: number;
   shopPageCount: number;
+  engineerPageNumber: number;
+  shopPageNumber: number;
   regions: DifferenceRegion[];
   markedPdf: Uint8Array;
 };
@@ -42,17 +44,17 @@ const MAX_FILE_SIZE = 50 * 1024 * 1024;
 const MAX_RENDER_DIMENSION = 1800;
 const TILE_SIZE = 16;
 const PIXEL_LEVEL_TOLERANCE = 28;
-const MIN_TILE_DIFFERENCES = 4;
+const MIN_TILE_DIFFERENCES = 6;
 const MIN_REGION_DIFFERENCES = 40;
-const MIN_REGISTRATION_INLIERS = 12;
-const MIN_REGISTRATION_INLIER_PERCENT = 0.2;
+const MIN_REGISTRATION_INLIERS = 20;
+const MIN_REGISTRATION_INLIER_PERCENT = 0.35;
 const MIN_MATCH_COVERAGE = 0.005;
+const MIN_MATCH_GRID_CELLS = 4;
 
-async function renderFirstPage(file: File): Promise<RenderedPage> {
+async function loadPdf(file: File) {
   if (file.size > MAX_FILE_SIZE) {
     throw new Error(`${file.name} exceeds the 50 MB local comparison limit.`);
   }
-
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = new URL(
     "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -62,22 +64,44 @@ async function renderFirstPage(file: File): Promise<RenderedPage> {
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(await file.arrayBuffer()),
   });
-  const document = await loadingTask.promise;
-  const page = await document.getPage(1);
-  const baseViewport = page.getViewport({ scale: 1 });
-  const scale = MAX_RENDER_DIMENSION / Math.max(baseViewport.width, baseViewport.height);
-  const viewport = page.getViewport({ scale });
-  const canvas = window.document.createElement("canvas");
-  canvas.width = Math.ceil(viewport.width);
-  canvas.height = Math.ceil(viewport.height);
-  const context = canvas.getContext("2d", { willReadFrequently: true });
+  return loadingTask;
+}
 
-  if (!context) {
-    await loadingTask.destroy();
-    throw new Error("This browser could not create a canvas for PDF comparison.");
-  }
-
+export async function getPdfPageCount(file: File) {
+  const loadingTask = await loadPdf(file);
   try {
+    const document = await loadingTask.promise;
+    return document.numPages;
+  } finally {
+    await loadingTask.destroy();
+  }
+}
+
+async function renderPage(file: File, pageNumber: number): Promise<RenderedPage> {
+  const loadingTask = await loadPdf(file);
+  try {
+    const document = await loadingTask.promise;
+    if (
+      !Number.isInteger(pageNumber) ||
+      pageNumber < 1 ||
+      pageNumber > document.numPages
+    ) {
+      throw new Error(`Page ${pageNumber} does not exist in ${file.name}.`);
+    }
+    const page = await document.getPage(pageNumber);
+    const baseViewport = page.getViewport({ scale: 1 });
+    const scale =
+      MAX_RENDER_DIMENSION / Math.max(baseViewport.width, baseViewport.height);
+    const viewport = page.getViewport({ scale });
+    const canvas = window.document.createElement("canvas");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+
+    if (!context) {
+      throw new Error("This browser could not create a canvas for PDF comparison.");
+    }
+
     await page.render({ canvas, canvasContext: context, viewport }).promise;
     return {
       canvas,
@@ -125,63 +149,111 @@ function pointCoverage(
   return (spanX * spanY) / (width * height);
 }
 
+function occupiedGridCells(
+  points: Array<{ x: number; y: number }>,
+  width: number,
+  height: number,
+) {
+  const gridSize = 4;
+  const occupiedCells = new Set<number>();
+  for (const point of points) {
+    const column = Math.min(
+      gridSize - 1,
+      Math.floor((point.x / width) * gridSize),
+    );
+    const row = Math.min(
+      gridSize - 1,
+      Math.floor((point.y / height) * gridSize),
+    );
+    occupiedCells.add(row * gridSize + column);
+  }
+  return occupiedCells.size;
+}
+
 type MatchedFeature = {
   source: { x: number; y: number };
   destination: { x: number; y: number };
 };
 
-type SimilarityTransform = {
+type AffineTransform = {
   a: number;
   b: number;
+  c: number;
+  d: number;
   tx: number;
   ty: number;
 };
 
-function mapPoint(transform: SimilarityTransform, point: { x: number; y: number }) {
+function mapPoint(transform: AffineTransform, point: { x: number; y: number }) {
   return {
-    x: transform.a * point.x - transform.b * point.y + transform.tx,
-    y: transform.b * point.x + transform.a * point.y + transform.ty,
+    x: transform.a * point.x + transform.c * point.y + transform.tx,
+    y: transform.b * point.x + transform.d * point.y + transform.ty,
   };
 }
 
-function fitSimilarityTransform(points: MatchedFeature[]): SimilarityTransform | null {
-  if (points.length < 2) return null;
+function solveLinearSystem(matrix: number[][], values: number[]) {
+  const size = values.length;
+  const augmented = matrix.map((row, index) => [...row, values[index]]);
 
-  const means = points.reduce(
-    (result, point) => ({
-      sourceX: result.sourceX + point.source.x / points.length,
-      sourceY: result.sourceY + point.source.y / points.length,
-      destinationX: result.destinationX + point.destination.x / points.length,
-      destinationY: result.destinationY + point.destination.y / points.length,
-    }),
-    { sourceX: 0, sourceY: 0, destinationX: 0, destinationY: 0 },
-  );
-  let denominator = 0;
-  let numeratorA = 0;
-  let numeratorB = 0;
+  for (let column = 0; column < size; column += 1) {
+    let pivot = column;
+    for (let row = column + 1; row < size; row += 1) {
+      if (Math.abs(augmented[row][column]) > Math.abs(augmented[pivot][column])) {
+        pivot = row;
+      }
+    }
+    if (Math.abs(augmented[pivot][column]) < 1e-8) return null;
+    [augmented[column], augmented[pivot]] = [augmented[pivot], augmented[column]];
 
-  for (const point of points) {
-    const sourceX = point.source.x - means.sourceX;
-    const sourceY = point.source.y - means.sourceY;
-    const destinationX = point.destination.x - means.destinationX;
-    const destinationY = point.destination.y - means.destinationY;
-    denominator += sourceX * sourceX + sourceY * sourceY;
-    numeratorA += sourceX * destinationX + sourceY * destinationY;
-    numeratorB += sourceX * destinationY - sourceY * destinationX;
+    const divisor = augmented[column][column];
+    for (let index = column; index <= size; index += 1) {
+      augmented[column][index] /= divisor;
+    }
+    for (let row = 0; row < size; row += 1) {
+      if (row === column) continue;
+      const factor = augmented[row][column];
+      for (let index = column; index <= size; index += 1) {
+        augmented[row][index] -= factor * augmented[column][index];
+      }
+    }
   }
 
-  if (denominator < 1) return null;
-  const a = numeratorA / denominator;
-  const b = numeratorB / denominator;
+  return augmented.map((row) => row[size]);
+}
+
+function fitAffineTransform(points: MatchedFeature[]): AffineTransform | null {
+  if (points.length < 3) return null;
+  const normalMatrix = [
+    [0, 0, 0],
+    [0, 0, 0],
+    [0, 0, 0],
+  ];
+  const xValues = [0, 0, 0];
+  const yValues = [0, 0, 0];
+  for (const point of points) {
+    const basis = [point.source.x, point.source.y, 1];
+    for (let row = 0; row < 3; row += 1) {
+      xValues[row] += basis[row] * point.destination.x;
+      yValues[row] += basis[row] * point.destination.y;
+      for (let column = 0; column < 3; column += 1) {
+        normalMatrix[row][column] += basis[row] * basis[column];
+      }
+    }
+  }
+  const xCoefficients = solveLinearSystem(normalMatrix, xValues);
+  const yCoefficients = solveLinearSystem(normalMatrix, yValues);
+  if (!xCoefficients || !yCoefficients) return null;
   return {
-    a,
-    b,
-    tx: means.destinationX - a * means.sourceX + b * means.sourceY,
-    ty: means.destinationY - b * means.sourceX - a * means.sourceY,
+    a: xCoefficients[0],
+    c: xCoefficients[1],
+    tx: xCoefficients[2],
+    b: yCoefficients[0],
+    d: yCoefficients[1],
+    ty: yCoefficients[2],
   };
 }
 
-function estimateSimilarityTransform(points: MatchedFeature[]) {
+function estimateAffineTransform(points: MatchedFeature[]) {
   let bestInliers: number[] = [];
   let bestSquaredError = Number.POSITIVE_INFINITY;
   let randomState = 0x6d2b79f5;
@@ -194,29 +266,19 @@ function estimateSimilarityTransform(points: MatchedFeature[]) {
   for (let iteration = 0; iteration < 1400; iteration += 1) {
     const first = nextIndex(points.length);
     let second = nextIndex(points.length);
-    if (first === second) continue;
+    while (second === first) second = nextIndex(points.length);
+    let third = nextIndex(points.length);
+    while (third === first || third === second) third = nextIndex(points.length);
+    const sample = [points[first], points[second], points[third]];
+    const [pointA, pointB, pointC] = sample.map((point) => point.source);
+    const triangleArea = Math.abs(
+      (pointB.x - pointA.x) * (pointC.y - pointA.y) -
+        (pointB.y - pointA.y) * (pointC.x - pointA.x),
+    );
+    if (triangleArea < 400) continue;
 
-    const sourceA = points[first].source;
-    const sourceB = points[second].source;
-    const sourceDx = sourceB.x - sourceA.x;
-    const sourceDy = sourceB.y - sourceA.y;
-    const denominator = sourceDx * sourceDx + sourceDy * sourceDy;
-    if (denominator < 400) continue;
-
-    const destinationA = points[first].destination;
-    const destinationB = points[second].destination;
-    const destinationDx = destinationB.x - destinationA.x;
-    const destinationDy = destinationB.y - destinationA.y;
-    const a =
-      (sourceDx * destinationDx + sourceDy * destinationDy) / denominator;
-    const b =
-      (sourceDx * destinationDy - sourceDy * destinationDx) / denominator;
-    const transform: SimilarityTransform = {
-      a,
-      b,
-      tx: destinationA.x - a * sourceA.x + b * sourceA.y,
-      ty: destinationA.y - b * sourceA.x - a * sourceA.y,
-    };
+    const transform = fitAffineTransform(sample);
+    if (!transform) continue;
     const inliers: number[] = [];
     let squaredError = 0;
 
@@ -240,28 +302,35 @@ function estimateSimilarityTransform(points: MatchedFeature[]) {
     }
   }
 
-  const inlierFeatures = bestInliers.map((index) => points[index]);
-  const transform = fitSimilarityTransform(inlierFeatures);
-  if (!transform) return null;
-
-  let squaredError = 0;
-  const refinedInliers: number[] = [];
-  for (let index = 0; index < points.length; index += 1) {
-    const mapped = mapPoint(transform, points[index].source);
-    const dx = mapped.x - points[index].destination.x;
-    const dy = mapped.y - points[index].destination.y;
-    const error = dx * dx + dy * dy;
-    if (error <= 16) {
-      refinedInliers.push(index);
-      squaredError += error;
+  let refinedInliers = bestInliers;
+  let refinedTransform: AffineTransform | null = null;
+  for (let refinement = 0; refinement < 5; refinement += 1) {
+    refinedTransform = fitAffineTransform(
+      refinedInliers.map((index) => points[index]),
+    );
+    if (!refinedTransform) return null;
+    const nextInliers: number[] = [];
+    for (let index = 0; index < points.length; index += 1) {
+      const mapped = mapPoint(refinedTransform, points[index].source);
+      const dx = mapped.x - points[index].destination.x;
+      const dy = mapped.y - points[index].destination.y;
+      if (dx * dx + dy * dy <= 16) nextInliers.push(index);
     }
+    if (nextInliers.length < 2) return null;
+    if (
+      nextInliers.length === refinedInliers.length &&
+      nextInliers.every((index, position) => index === refinedInliers[position])
+    ) {
+      break;
+    }
+    refinedInliers = nextInliers;
   }
 
-  const refinedTransform = fitSimilarityTransform(
+  refinedTransform = fitAffineTransform(
     refinedInliers.map((index) => points[index]),
   );
   if (!refinedTransform) return null;
-  squaredError = 0;
+  let squaredError = 0;
   for (const index of refinedInliers) {
     const mapped = mapPoint(refinedTransform, points[index].source);
     const dx = mapped.x - points[index].destination.x;
@@ -292,6 +361,7 @@ async function alignShopPage(
   const engineerDescriptors = new cv.Mat();
   const shopDescriptors = new cv.Mat();
   const matches = new cv.DMatchVectorVector();
+  const reverseMatches = new cv.DMatchVectorVector();
   const matcher = new cv.BFMatcher(cv.NORM_HAMMING, false);
   const emptyMask = new cv.Mat();
   let detector: InstanceType<typeof cv.ORB> | undefined;
@@ -301,7 +371,7 @@ async function alignShopPage(
   try {
     cv.cvtColor(engineerImage, engineerGray, cv.COLOR_RGBA2GRAY);
     cv.cvtColor(shopImage, shopGray, cv.COLOR_RGBA2GRAY);
-    detector = new cv.ORB(5000, 1.2, 8, 31, 0, 2, cv.ORB_HARRIS_SCORE, 31, 10);
+    detector = new cv.ORB(8000, 1.2, 8, 31, 0, 2, cv.ORB_HARRIS_SCORE, 31, 7);
     detector.detectAndCompute(
       engineerGray,
       emptyMask,
@@ -322,8 +392,17 @@ async function alignShopPage(
     }
 
     matcher.knnMatch(shopDescriptors, engineerDescriptors, matches, 2);
-    const sourceCoveragePoints: Array<{ x: number; y: number }> = [];
-    const destinationCoveragePoints: Array<{ x: number; y: number }> = [];
+    matcher.knnMatch(engineerDescriptors, shopDescriptors, reverseMatches, 2);
+    const reverseBestMatches = new Map<number, number>();
+    for (let index = 0; index < reverseMatches.size(); index += 1) {
+      const pair = reverseMatches.get(index);
+      if (pair.size() < 2) continue;
+      const best = pair.get(0);
+      const second = pair.get(1);
+      if (best.distance < second.distance * 0.75) {
+        reverseBestMatches.set(best.queryIdx, best.trainIdx);
+      }
+    }
     const matchedFeatures: MatchedFeature[] = [];
 
     for (let index = 0; index < matches.size(); index += 1) {
@@ -331,11 +410,12 @@ async function alignShopPage(
       if (pair.size() >= 2) {
         const best = pair.get(0);
         const second = pair.get(1);
-        if (best.distance < second.distance * 0.75) {
+        if (
+          best.distance < second.distance * 0.75 &&
+          reverseBestMatches.get(best.trainIdx) === best.queryIdx
+        ) {
           const source = shopKeypoints.get(best.queryIdx).pt;
           const destination = engineerKeypoints.get(best.trainIdx).pt;
-          sourceCoveragePoints.push({ x: source.x, y: source.y });
-          destinationCoveragePoints.push({ x: destination.x, y: destination.y });
           matchedFeatures.push({
             source: { x: source.x, y: source.y },
             destination: { x: destination.x, y: destination.y },
@@ -344,13 +424,13 @@ async function alignShopPage(
       }
     }
 
-    if (sourceCoveragePoints.length < MIN_REGISTRATION_INLIERS) {
+    if (matchedFeatures.length < MIN_REGISTRATION_INLIERS) {
       throw new Error(
         "Could not find enough matching features to align the pages. Make sure both drawings show the same plan area.",
       );
     }
 
-    const estimate = estimateSimilarityTransform(matchedFeatures);
+    const estimate = estimateAffineTransform(matchedFeatures);
     if (!estimate) {
       throw new Error(
         "Could not compute a reliable page alignment. Use drawings with more shared visible detail.",
@@ -365,8 +445,13 @@ async function alignShopPage(
       (point) => point.destination,
     );
     const inliers = estimate.inlierIndices.length;
-    const inlierPercent = inliers / sourceCoveragePoints.length;
-    const scale = Math.hypot(estimate.transform.a, estimate.transform.b);
+    const inlierPercent = inliers / matchedFeatures.length;
+    const scaleX = Math.hypot(estimate.transform.a, estimate.transform.b);
+    const scaleY = Math.hypot(estimate.transform.c, estimate.transform.d);
+    const scale = Math.sqrt(Math.abs(
+      estimate.transform.a * estimate.transform.d -
+        estimate.transform.b * estimate.transform.c,
+    ));
     const rotationDegrees =
       (Math.atan2(estimate.transform.b, estimate.transform.a) * 180) / Math.PI;
     const reprojectionError = estimate.reprojectionError;
@@ -380,14 +465,32 @@ async function alignShopPage(
       engineerCanvas.width,
       engineerCanvas.height,
     );
+    const sourceGridCells = occupiedGridCells(
+      inlierSourcePoints,
+      shopCanvas.width,
+      shopCanvas.height,
+    );
+    const destinationGridCells = occupiedGridCells(
+      inlierDestinationPoints,
+      engineerCanvas.width,
+      engineerCanvas.height,
+    );
     const validTransform =
       Number.isFinite(estimate.transform.a) &&
       Number.isFinite(estimate.transform.b) &&
+      Number.isFinite(estimate.transform.c) &&
+      Number.isFinite(estimate.transform.d) &&
       Number.isFinite(estimate.transform.tx) &&
       Number.isFinite(estimate.transform.ty) &&
       Number.isFinite(scale) &&
-      scale >= 0.05 &&
-      scale <= 20;
+      scaleX >= 0.05 &&
+      scaleX <= 20 &&
+      scaleY >= 0.05 &&
+      scaleY <= 20 &&
+      Math.max(scaleX, scaleY) / Math.min(scaleX, scaleY) <= 4 &&
+      estimate.transform.a * estimate.transform.d -
+        estimate.transform.b * estimate.transform.c >
+        0;
 
     if (
       !validTransform ||
@@ -395,6 +498,8 @@ async function alignShopPage(
       inlierPercent < MIN_REGISTRATION_INLIER_PERCENT ||
       sourceCoverage < MIN_MATCH_COVERAGE ||
       destinationCoverage < MIN_MATCH_COVERAGE ||
+      sourceGridCells < MIN_MATCH_GRID_CELLS ||
+      destinationGridCells < MIN_MATCH_GRID_CELLS ||
       reprojectionError > 4
     ) {
       throw new Error(
@@ -404,10 +509,10 @@ async function alignShopPage(
 
     affine = cv.matFromArray(2, 3, cv.CV_64FC1, [
       estimate.transform.a,
-      -estimate.transform.b,
+      estimate.transform.c,
       estimate.transform.tx,
       estimate.transform.b,
-      estimate.transform.a,
+      estimate.transform.d,
       estimate.transform.ty,
     ]);
     aligned = new cv.Mat();
@@ -428,7 +533,7 @@ async function alignShopPage(
       canvas,
       registration: {
         inliers,
-        matchedFeatures: sourceCoveragePoints.length,
+        matchedFeatures: matchedFeatures.length,
         inlierPercent,
         scale,
         rotationDegrees,
@@ -445,6 +550,7 @@ async function alignShopPage(
     engineerDescriptors.delete();
     shopDescriptors.delete();
     matches.delete();
+    reverseMatches.delete();
     matcher.delete();
     emptyMask.delete();
     detector?.delete();
@@ -531,6 +637,7 @@ function findDifferenceRegions(
       for (let rowOffset = -1; rowOffset <= 1; rowOffset += 1) {
         for (let columnOffset = -1; columnOffset <= 1; columnOffset += 1) {
           if (rowOffset === 0 && columnOffset === 0) continue;
+          if (rowOffset !== 0 && columnOffset !== 0) continue;
           const nextColumn = column + columnOffset;
           const nextRow = row + rowOffset;
           if (
@@ -553,12 +660,23 @@ function findDifferenceRegions(
     if (changedPixels < MIN_REGION_DIFFERENCES) continue;
     const x = minColumn * TILE_SIZE;
     const y = minRow * TILE_SIZE;
+    const width =
+      Math.min(engineer.width, (maxColumn + 1) * TILE_SIZE) - x;
+    const height =
+      Math.min(engineer.height, (maxRow + 1) * TILE_SIZE) - y;
+    const area = width * height;
+    if (
+      area >= engineer.width * engineer.height * 0.2 &&
+      changedPixels / area < 0.02
+    ) {
+      continue;
+    }
     regions.push({
       id: regions.length + 1,
       x,
       y,
-      width: Math.min(engineer.width, (maxColumn + 1) * TILE_SIZE) - x,
-      height: Math.min(engineer.height, (maxRow + 1) * TILE_SIZE) - y,
+      width,
+      height,
       changedPixels,
     });
   }
@@ -628,13 +746,15 @@ async function createMarkedPdf(
   return pdf.save();
 }
 
-export async function comparePdfFirstPages(
+export async function comparePdfPages(
   engineerFile: File,
   shopFile: File,
+  engineerPageNumber: number,
+  shopPageNumber: number,
 ): Promise<PdfComparison> {
   const [engineer, shop] = await Promise.all([
-    renderFirstPage(engineerFile),
-    renderFirstPage(shopFile),
+    renderPage(engineerFile, engineerPageNumber),
+    renderPage(shopFile, shopPageNumber),
   ]);
 
   const { canvas: alignedShopCanvas, registration } = await alignShopPage(
@@ -678,7 +798,16 @@ export async function comparePdfFirstPages(
     registration,
     engineerPageCount: engineer.pageCount,
     shopPageCount: shop.pageCount,
+    engineerPageNumber,
+    shopPageNumber,
     regions,
     markedPdf,
   };
+}
+
+export function comparePdfFirstPages(
+  engineerFile: File,
+  shopFile: File,
+): Promise<PdfComparison> {
+  return comparePdfPages(engineerFile, shopFile, 1, 1);
 }

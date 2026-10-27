@@ -11,4 +11,4 @@ Use synthetic PDFs or drawings with explicit permission for automated test use. 
 | Engineer-issued (S-201) | 6'-0" |
 | Fabricator shop drawing (SD-201) | 5'-0" |
 
-The beam is visibly shifted by one foot on the shop drawing. Both sheets label the difference and are marked as synthetic and not for construction. The local frontend compares only page 1 and exports a rasterized candidate markup; it does not make engineering determinations.
+The beam is visibly shifted by one foot on the shop drawing. Both sheets label the difference and are marked as synthetic and not for construction. The local frontend can compare the selected pages and exports a rasterized candidate markup; it does not make engineering determinations.

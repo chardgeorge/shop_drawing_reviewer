@@ -1330,6 +1330,48 @@ h1 {
   }
 }
 
+.visual-comparison-tool {
+  margin-top: 24px;
+  padding: 21px;
+  border: 1px solid #e1e7e5;
+  border-radius: 9px;
+  background: #fff;
+}
+
+.visual-comparison-controls {
+  display: grid;
+  grid-template-columns: minmax(180px, 2fr) minmax(100px, 0.7fr) minmax(180px, 2fr) minmax(100px, 0.7fr) auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.visual-comparison-controls label {
+  display: grid;
+  gap: 6px;
+  color: #536677;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.visual-comparison-controls select {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 9px;
+  border: 1px solid #dce3e4;
+  border-radius: 5px;
+  color: #283b4e;
+  background: #fff;
+  font: inherit;
+}
+
+.visual-comparison-controls .continue-button {
+  min-height: 38px;
+  padding: 0 13px;
+  white-space: nowrap;
+}
+
 .comparison-result {
   margin-top: 30px;
   padding: 21px;
@@ -1346,7 +1388,8 @@ h1 {
   gap: 20px;
 }
 
-.comparison-result-heading h2 {
+.comparison-result-heading h2,
+.comparison-result-heading h3 {
   margin: 11px 0 6px;
   color: #283b4e;
   font-size: 19px;
@@ -1442,6 +1485,14 @@ h1 {
 }
 
 @media (max-width: 760px) {
+  .visual-comparison-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .visual-comparison-controls .continue-button {
+    grid-column: 1 / -1;
+  }
+
   .comparison-result-heading {
     flex-direction: column;
   }

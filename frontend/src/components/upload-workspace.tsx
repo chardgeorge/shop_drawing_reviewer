@@ -165,6 +165,7 @@ export default function UploadWorkspace() {
     engineering: null,
     shop: null,
   });
+  const draftBeamLineRef = useRef<BeamLine | null>(null);
   const engineeringInput = useRef<HTMLInputElement>(null);
   const shopInput = useRef<HTMLInputElement>(null);
 

@@ -26,6 +26,14 @@ export type GridBubble = {
 
 type GridLine = GridBubble & { directionDegrees: number; directionScore: number };
 
+/** A named grid line in engineer page points: passes through (x, y) at directionDegrees. */
+export type EngineerGridLine = {
+  label: string;
+  x: number;
+  y: number;
+  directionDegrees: number;
+};
+
 export type GridRegistration = {
   /** Maps shop page points to engineer page points: [a, -b, tx, b, a, ty]. */
   matrix: [number, number, number, number, number, number];
@@ -39,6 +47,8 @@ export type GridRegistration = {
   shopBubbleSource: "text" | "ocr";
   engineerBubbles: number;
   shopBubbles: number;
+  /** Grid lines in engineer page points, for locating members by grid. */
+  engineerGridLines: EngineerGridLine[];
 };
 
 export type GridProgress = (message: string) => void;
@@ -120,7 +130,7 @@ export async function textGridBubbles(page: PDFPageProxy): Promise<GridBubble[]>
 
 // ---------------------------------------------------------------- rendering
 
-async function renderGray(page: PDFPageProxy, zoom: number) {
+export async function renderGray(page: PDFPageProxy, zoom: number) {
   const viewport = page.getViewport({ scale: zoom });
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(viewport.width);
@@ -202,7 +212,7 @@ type OcrWorker = {
   terminate(): Promise<unknown>;
 };
 
-async function createOcrWorkers(count: number) {
+export async function createOcrWorkers(count: number) {
   const tesseract = await import("tesseract.js");
   const options = {
     workerPath: "/ocr/worker.min.js",
@@ -604,7 +614,20 @@ export async function registerByGrid(
     const ity = -(ib * tx + ia * ty);
     [a, b, tx, ty] = [ia, ib, itx, ity];
   }
+  const rotation = (Math.atan2(b, a) * 180) / Math.PI;
+  const usableLines = lines.filter((line) => line.directionScore >= MIN_DIRECTION_SCORE);
+  const engineerGridLines: EngineerGridLine[] = usableLines.map((line) =>
+    linesFromEngineer
+      ? { label: line.labels[0], x: line.x, y: line.y, directionDegrees: line.directionDegrees }
+      : {
+          label: line.labels[0],
+          x: a * line.x - b * line.y + tx,
+          y: b * line.x + a * line.y + ty,
+          directionDegrees: line.directionDegrees + rotation,
+        },
+  );
   return {
+    engineerGridLines,
     matrix: [a, -b, tx, b, a, ty],
     scale: Math.hypot(a, b),
     rotationDegrees: (Math.atan2(b, a) * 180) / Math.PI,

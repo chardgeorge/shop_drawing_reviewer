@@ -2,10 +2,20 @@
 
 import { useEffect, useState } from "react";
 import {
+  comparePdfMembers,
   comparePdfPages,
   getPdfPageCount,
 } from "@/lib/pdf-compare";
 import type { PdfComparison } from "@/lib/pdf-compare";
+import { visionAvailable } from "@/lib/member-compare";
+import type { MemberComparison, MemberStatus } from "@/lib/member-compare";
+
+const STATUS_LABEL: Record<MemberStatus, string> = {
+  different: "Different size",
+  not_found: "Not found on shop drawing",
+  unreadable: "Couldn't read",
+  match: "Match",
+};
 
 type CompareDrawing = {
   id: string;
@@ -51,6 +61,23 @@ export default function VisualComparison({
   const [comparison, setComparison] = useState<ComparisonDisplay | null>(null);
   const [progress, setProgress] = useState("");
   const [gridView, setGridView] = useState<"overlay" | "engineer" | "shop">("overlay");
+  const [members, setMembers] = useState<MemberComparison | null>(null);
+  const [isComparingMembers, setIsComparingMembers] = useState(false);
+  const [memberProgress, setMemberProgress] = useState("");
+  const [memberNotice, setMemberNotice] = useState("");
+  const [useVision, setUseVision] = useState(false);
+  const [visionReady, setVisionReady] = useState(false);
+  const [memberFilter, setMemberFilter] = useState<MemberStatus | "issues" | "all">("issues");
+
+  useEffect(() => {
+    let active = true;
+    visionAvailable().then((ready) => {
+      if (active) setVisionReady(ready);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const engineerFile = engineeringFiles.find((item) => item.id === engineerId)?.file;
   const shopFile = shopFiles.find((item) => item.id === shopId)?.file;
@@ -114,6 +141,8 @@ export default function VisualComparison({
     setIsComparing(true);
     setNotice("");
     setComparison(null);
+    setMembers(null);
+    setMemberNotice("");
     setProgress("Rendering pages…");
     setGridView("overlay");
     try {
@@ -143,6 +172,50 @@ export default function VisualComparison({
       setProgress("");
     }
   }
+
+  async function runMemberComparison() {
+    const grid = comparison?.registration.grid;
+    if (!engineerFile || !shopFile || !grid) return;
+    setIsComparingMembers(true);
+    setMemberNotice("");
+    setMembers(null);
+    setMemberFilter("issues");
+    try {
+      const result = await comparePdfMembers(
+        engineerFile,
+        shopFile,
+        comparison.engineerPageNumber,
+        comparison.shopPageNumber,
+        grid,
+        { useVision: useVision && visionReady, progress: setMemberProgress },
+      );
+      setMembers(result);
+      if (result.visionError) {
+        setMemberNotice(`Vision reading stopped early: ${result.visionError}`);
+      }
+    } catch (error) {
+      setMemberNotice(error instanceof Error ? error.message : "Member comparison failed.");
+    } finally {
+      setIsComparingMembers(false);
+      setMemberProgress("");
+    }
+  }
+
+  const memberCounts = members
+    ? members.findings.reduce(
+        (counts, finding) => ({ ...counts, [finding.status]: counts[finding.status] + 1 }),
+        { match: 0, different: 0, not_found: 0, unreadable: 0 } as Record<MemberStatus, number>,
+      )
+    : null;
+  const visibleFindings = members
+    ? members.findings.filter((finding) =>
+        memberFilter === "all"
+          ? true
+          : memberFilter === "issues"
+            ? finding.status !== "match"
+            : finding.status === memberFilter,
+      )
+    : [];
 
   const canCompare =
     Boolean(engineerFile && shopFile) &&
@@ -346,6 +419,114 @@ export default function VisualComparison({
               </button>
             ))}
           </div>
+          <section className="member-compare" aria-labelledby="member-compare-heading">
+            <div className="member-compare-heading">
+              <div>
+                <h3 id="member-compare-heading">Compare members by grid location</h3>
+                <p>
+                  Reads each member size on the engineer sheet, finds the same spot on the
+                  shop drawing, and reads the shop&apos;s label there.
+                </p>
+              </div>
+              <button
+                className="continue-button"
+                type="button"
+                onClick={runMemberComparison}
+                disabled={isComparingMembers}
+              >
+                {isComparingMembers ? "Comparing members..." : "Compare members"}
+              </button>
+            </div>
+            <label className={`vision-option ${visionReady ? "" : "is-disabled"}`}>
+              <input
+                type="checkbox"
+                checked={useVision && visionReady}
+                disabled={!visionReady || isComparingMembers}
+                onChange={(event) => setUseVision(event.target.checked)}
+              />
+              <span>
+                Read unclear labels with Claude. Sends only small crops of the shop drawing
+                that local OCR could not read.
+                {!visionReady && " (Not configured: add ANTHROPIC_API_KEY to frontend/.env.local.)"}
+              </span>
+            </label>
+            {isComparingMembers && memberProgress && (
+              <p className="registration-summary" role="status">{memberProgress}</p>
+            )}
+            {memberNotice && <p className="notice-message" role="alert">{memberNotice}</p>}
+            {members && memberCounts && (
+              <>
+                <div className="member-summary" role="group" aria-label="Filter members">
+                  {(
+                    [
+                      ["issues", `Needs review ${members.findings.length - memberCounts.match}`],
+                      ["different", `Different ${memberCounts.different}`],
+                      ["not_found", `Not found ${memberCounts.not_found}`],
+                      ["unreadable", `Couldn't read ${memberCounts.unreadable}`],
+                      ["match", `Match ${memberCounts.match}`],
+                      ["all", `All ${members.findings.length}`],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`member-chip member-chip-${key} ${memberFilter === key ? "is-selected" : ""}`}
+                      aria-pressed={memberFilter === key}
+                      onClick={() => setMemberFilter(key)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="comparison-caveat">
+                  {members.visionUsed
+                    ? `${members.visionCalls} unclear labels were read by the vision model. `
+                    : "Read with local OCR only. "}
+                  Findings are prompts for review, not engineering conclusions. Sizes are
+                  compared as written; fabricator suffixes such as * are ignored.
+                </p>
+                <ul className="member-list">
+                  {visibleFindings.map((finding) => (
+                    <li key={finding.id} className={`member-card member-${finding.status}`}>
+                      <div className="member-card-head">
+                        <strong>{finding.gridLocation}</strong>
+                        <span className={`member-status member-status-${finding.status}`}>
+                          {STATUS_LABEL[finding.status]}
+                        </span>
+                      </div>
+                      <div className="member-values">
+                        <div>
+                          <span>ENGINEER</span>
+                          <b>{finding.engineerLabel}</b>
+                        </div>
+                        <div>
+                          <span>
+                            SHOP{finding.readBy !== "none" ? ` · read by ${finding.readBy === "ocr" ? "OCR" : "Claude"}` : ""}
+                          </span>
+                          <b>{finding.shopDesignation ?? "—"}</b>
+                        </div>
+                      </div>
+                      {finding.note && <p className="member-note">{finding.note}</p>}
+                      <div className="member-crops">
+                        <figure>
+                          <figcaption>Engineer</figcaption>
+                          <img src={finding.engineerCrop} alt={`Engineer label ${finding.engineerLabel}`} />
+                        </figure>
+                        <figure>
+                          <figcaption>Shop (same location)</figcaption>
+                          <img src={finding.shopCrop} alt="Shop drawing at the same grid location" />
+                        </figure>
+                      </div>
+                    </li>
+                  ))}
+                  {visibleFindings.length === 0 && (
+                    <li className="member-empty">No members in this group.</li>
+                  )}
+                </ul>
+              </>
+            )}
+          </section>
+
           <figure className="comparison-preview grid-overlay-preview">
             <img
               src={

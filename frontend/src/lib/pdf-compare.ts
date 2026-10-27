@@ -4,6 +4,8 @@ import type { CV } from "@techstark/opencv-js";
 import type { PDFPageProxy } from "pdfjs-dist";
 import { registerByGrid, renderGridOverlay } from "@/lib/grid-registration";
 import type { GridProgress, GridRegistration } from "@/lib/grid-registration";
+import { compareMembers } from "@/lib/member-compare";
+import type { MemberComparison } from "@/lib/member-compare";
 
 export type DifferenceRegion = {
   id: number;
@@ -1028,4 +1030,27 @@ export function comparePdfFirstPages(
   shopFile: File,
 ): Promise<PdfComparison> {
   return comparePdfPages(engineerFile, shopFile, 1, 1, 1, 1);
+}
+
+/**
+ * Member-by-member comparison on top of a completed grid alignment.
+ * Opens the two pages again (comparePdfPages releases them when it finishes).
+ */
+export async function comparePdfMembers(
+  engineerFile: File,
+  shopFile: File,
+  engineerPageNumber: number,
+  shopPageNumber: number,
+  registration: GridRegistration,
+  options: { useVision: boolean; progress?: GridProgress },
+): Promise<MemberComparison> {
+  const [engineerPdf, shopPdf] = await Promise.all([
+    openPdfPage(engineerFile, engineerPageNumber),
+    openPdfPage(shopFile, shopPageNumber),
+  ]);
+  try {
+    return await compareMembers(engineerPdf.page, shopPdf.page, registration, options);
+  } finally {
+    await Promise.all([engineerPdf.destroy(), shopPdf.destroy()]);
+  }
 }

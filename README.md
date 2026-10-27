@@ -1,18 +1,17 @@
 # Shop Drawing Reviewer
 
-An engineering-led application for comparing fabricator steel shop drawings with engineer-issued documents. The MVP extracts beam schedules from PDFs, compares member sizes deterministically, and presents traceable findings for engineer review.
+A browser-based tool for visually comparing one engineer-issued drawing PDF with one shop drawing PDF. It aligns the selected pages and highlights candidate visual differences.
 
 > This tool supports review; it does not approve drawings, replace engineering judgment, or establish design adequacy.
 
-## MVP scope
+## Frontend scope
 
-- Create projects and upload engineer-issued and shop-drawing PDFs.
-- Extract PDF text and beam schedule rows, preserving page and source evidence.
-- Match members by mark and compare section sizes using deterministic rules.
-- Present issues with their source references and allow engineers to review the results.
-- Keep AI optional and limited to drafting explanations from verified findings.
+- Select one engineer-issued PDF and one shop PDF.
+- Compare selected pages directly in the browser, without uploading the files to a backend.
+- Align pages with shared visual geometry and highlight candidate pixel differences.
+- Download a rasterized markup of the aligned shop page.
 
-Out of scope for the first release: production-grade drawing vision, connection geometry checks, automatic drawing approval, production-quality PDF markup, and cloud collaboration. The local frontend includes an experimental, browser-only visual comparison for selected PDF pages.
+The comparison is experimental and does not approve drawings or replace engineering judgment.
 
 ## Repository layout
 
@@ -51,20 +50,17 @@ See [Solution architecture](docs/SOLUTION_ARCHITECTURE.md), [Data model](docs/DA
 - PostgreSQL 16+
 - Docker Desktop (optional, for local PostgreSQL)
 
-The frontend includes the existing project upload and schedule-extraction review workflow, plus an optional browser-only visual comparison of selected PDF pages. Backend services, authentication, deployment configuration, and production data-retention policy remain to be implemented and agreed.
+The current frontend is a standalone PDF comparison tool. The repository also retains backend project and extraction services, which are not used by this frontend flow.
 
 ## Engineering and data handling principles
 
-1. A finding must be reproducible from stored extracted values and a versioned rule.
-2. Preserve original values and page-level evidence; never silently normalize away discrepancies.
-3. Ambiguous or missing evidence must be reported as such, not guessed.
-4. Review decisions are attributable and do not alter the original documents or generated finding.
-5. Uploaded project drawings are confidential: keep working PDFs on the developer's machine outside this Git repository. Only synthetic or explicitly approved/licensed test fixtures may be committed. Do not send document content to external AI services unless explicitly approved.
-6. Engineers remain responsible for review and disposition.
+1. Drawing PDFs are confidential: keep real project files local and outside this Git repository.
+2. The frontend compares PDFs in the browser; it does not send their content to external AI services.
+3. Visual candidates are not engineering conclusions. Engineers remain responsible for reviewing the original drawings and deciding what to do.
 
 ## Development status
 
-Architecture and implementation plan are documented. The frontend includes an experimental browser-only page-registration and pixel-difference prototype alongside the project upload and extraction-review workflow. Backend services, authentication, deployment configuration, and production data-retention policy remain to be implemented and agreed.
+The frontend provides browser-only page registration and pixel-difference comparison. Backend project and extraction services remain in the repository but are not part of this comparison workflow.
 
 ## Run the frontend preview
 
@@ -76,7 +72,7 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Next.js (normally `http://localhost:3000`). Add engineer-issued and shop PDFs, choose a file and page from each set in **Compare drawing pages**, and select the printed scale for both pages (imperial or metric). Choose **Align selected pages** to render and automatically align the pages using shared visual features; the measured alignment scale is checked against the expected ratio from the two required scale inputs. Before discrepancy detection, drag the aligned shop page and adjust its scale or rotation to fine-tune the registration. A 10 × 10 grid can be toggled on both pages during alignment and review. Choose **Find discrepancies** to highlight candidate discrepancies on both page previews. Separate rasterized marked-page PDFs can be downloaded for the engineer page and aligned shop page. Small differences within a one-pixel neighborhood are ignored to reduce line-weight and rasterization noise. Uploaded files remain unchanged, and visual comparison does not change the project upload and extraction workflow.
+Open the local URL printed by Next.js (normally `http://localhost:3000`). Select one engineer-issued PDF and one shop PDF, choose a page and printed scale for each (imperial or metric), and choose **Align selected pages**. The pages are rendered and automatically aligned using shared visual features; the measured alignment scale is checked against the expected ratio from the selected scales. Different page dimensions are fitted to a shared canvas with white space as needed, preserving both pages' full extents. Drag the aligned shop page and adjust its scale or rotation to fine-tune registration. A 10 × 10 grid can be toggled on both pages during alignment and review. Choose **Find discrepancies** to highlight candidate discrepancies on both previews. Separate rasterized marked-page PDFs can be downloaded for each page. Small differences within a one-pixel neighborhood are ignored to reduce line-weight and rasterization noise. Files stay in the browser and are not uploaded to the backend.
 
 This is experimental visual registration and pixel comparison, not engineering review automation. It supports page-size, scale, rotation, translation, and moderate affine skew differences when the pages retain enough shared geometry. Low-confidence matches are rejected. It cannot reliably compare unrelated drawings, substantial redesigns, severe crops, or perspective-distorted scans, and it does not automatically identify corresponding pages across PDFs; select the pages to compare. Text, revisions, and title-block changes may be highlighted, and real differences may be missed. Review the alignment, originals, and every candidate. Downloads contain only the selected page, rendered as a rasterized image with candidate highlights; they do not replace or modify the source PDFs. Use sample PDFs that you have permission to test, stored locally; do not commit project drawings to this repository.
 

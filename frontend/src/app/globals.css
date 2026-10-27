@@ -767,6 +767,27 @@ h1 {
   line-height: 1.5;
 }
 
+.alignment-warning {
+  margin: 15px 0 0;
+  padding: 12px 14px;
+  border: 1px solid #e7d08b;
+  border-radius: 6px;
+  color: #70551e;
+  background: #fff5cf;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.alignment-warning strong {
+  display: block;
+  margin-bottom: 4px;
+  color: #654b14;
+}
+
+.alignment-warning p {
+  margin: 4px 0 0;
+}
+
 .bottom-row {
   position: relative;
   z-index: 2;

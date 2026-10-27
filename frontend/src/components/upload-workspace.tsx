@@ -152,6 +152,11 @@ export default function UploadWorkspace() {
   const [notice, setNotice] = useState("");
   const [comparison, setComparison] = useState<ComparisonDisplay | null>(null);
   const [isComparing, setIsComparing] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [previewUrls, setPreviewUrls] = useState<Record<DrawingSide, string | null>>({
+    engineering: null,
+    shop: null,
+  });
   const engineeringInput = useRef<HTMLInputElement>(null);
   const shopInput = useRef<HTMLInputElement>(null);
 
@@ -170,6 +175,22 @@ export default function UploadWorkspace() {
     if (!comparison) return;
     return () => URL.revokeObjectURL(comparison.markedPdfUrl);
   }, [comparison]);
+
+  useEffect(() => {
+    const nextUrls: Record<DrawingSide, string | null> = {
+      engineering: files.engineering[0]
+        ? URL.createObjectURL(files.engineering[0].file)
+        : null,
+      shop: files.shop[0] ? URL.createObjectURL(files.shop[0].file) : null,
+    };
+
+    setPreviewUrls(nextUrls);
+    return () => {
+      Object.values(nextUrls).forEach((url) => {
+        if (url) URL.revokeObjectURL(url);
+      });
+    };
+  }, [files]);
 
   function addFiles(side: DrawingSide, selected: FileList | File[]) {
     const accepted: DrawingFile[] = [];
@@ -234,6 +255,7 @@ export default function UploadWorkspace() {
     if (!engineerFile || !shopFile) return;
 
     setIsComparing(true);
+    setIsSidebarOpen(false);
     setNotice("");
     setComparison(null);
     try {
@@ -312,19 +334,38 @@ export default function UploadWorkspace() {
           }}
           onDrop={(event) => handleDrop(side, event)}
         >
-          <div className="upload-symbol">
-            <Icon name="upload" size={23} />
-          </div>
-          <p className="drop-title">Drop PDF files here</p>
-          <p className="drop-or">or</p>
-          <button
-            className="browse-button"
-            type="button"
-            onClick={() => getInput(side).current?.click()}
-          >
-            Browse files
-          </button>
-          <span className="file-hint">PDF only · Multiple files supported</span>
+          {selected.length > 0 && previewUrls[side] ? (
+            <>
+              <iframe
+                className="upload-preview"
+                src={`${previewUrls[side]}#page=1&view=FitH`}
+                title={`${copy.title} first-page preview`}
+              />
+              <button
+                className="browse-button preview-browse-button"
+                type="button"
+                onClick={() => getInput(side).current?.click()}
+              >
+                Add more files
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="upload-symbol">
+                <Icon name="upload" size={23} />
+              </div>
+              <p className="drop-title">Drop PDF files here</p>
+              <p className="drop-or">or</p>
+              <button
+                className="browse-button"
+                type="button"
+                onClick={() => getInput(side).current?.click()}
+              >
+                Browse files
+              </button>
+              <span className="file-hint">PDF only · Multiple files supported</span>
+            </>
+          )}
         </div>
 
         {selected.length > 0 && (
@@ -365,16 +406,29 @@ export default function UploadWorkspace() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
+      <aside
+        id="review-navigation"
+        className={`sidebar ${isSidebarOpen ? "" : "sidebar-collapsed"}`}
+      >
         <a className="brand" href="#" aria-label="Shop Drawing Reviewer home">
           <span className="brand-mark">
             <Icon name="logo" size={22} />
           </span>
           <span className="brand-copy">
-            <strong>shopcheck</strong>
+            <strong>shopChecker</strong>
             <span>STRUCTURAL REVIEW</span>
           </span>
         </a>
+        <button
+          className="sidebar-toggle"
+          type="button"
+          aria-expanded={isSidebarOpen}
+          aria-controls="review-navigation"
+          onClick={() => setIsSidebarOpen(false)}
+        >
+          <Icon name="grid" size={16} />
+          <span>Collapse menu</span>
+        </button>
 
         <div className="workspace-label">WORKSPACE</div>
         <nav className="sidebar-nav" aria-label="Main navigation">
@@ -425,18 +479,18 @@ export default function UploadWorkspace() {
       </aside>
 
       <main className="main-content" id="upload">
-        <header className="topbar">
-          <div className="breadcrumb">
-            <span>Workspace</span>
-            <span className="breadcrumb-divider">/</span>
-            <strong>New review</strong>
-          </div>
-          <div className="topbar-status">
-            <span className="status-dot" />
-            MVP preview
-          </div>
-        </header>
-
+        {!isSidebarOpen && (
+          <button
+            className="menu-toggle"
+            type="button"
+            aria-expanded={isSidebarOpen}
+            aria-controls="review-navigation"
+            onClick={() => setIsSidebarOpen(true)}
+          >
+            <Icon name="grid" size={17} />
+            <span>Show menu</span>
+          </button>
+        )}
         <div className="content-wrap">
           <div className="page-intro">
             <div>

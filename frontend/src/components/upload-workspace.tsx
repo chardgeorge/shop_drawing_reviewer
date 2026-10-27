@@ -410,25 +410,22 @@ export default function UploadWorkspace() {
         id="review-navigation"
         className={`sidebar ${isSidebarOpen ? "" : "sidebar-collapsed"}`}
       >
-        <a className="brand" href="#" aria-label="Shop Drawing Reviewer home">
-          <span className="brand-mark">
-            <Icon name="logo" size={22} />
-          </span>
+        <div className="brand">
+          <button
+            className="sidebar-toggle"
+            type="button"
+            aria-label="Collapse menu"
+            aria-expanded={isSidebarOpen}
+            aria-controls="review-navigation"
+            onClick={() => setIsSidebarOpen(false)}
+          >
+            <Icon name="grid" size={20} />
+          </button>
           <span className="brand-copy">
             <strong>shopChecker</strong>
             <span>STRUCTURAL REVIEW</span>
           </span>
-        </a>
-        <button
-          className="sidebar-toggle"
-          type="button"
-          aria-expanded={isSidebarOpen}
-          aria-controls="review-navigation"
-          onClick={() => setIsSidebarOpen(false)}
-        >
-          <Icon name="grid" size={16} />
-          <span>Collapse menu</span>
-        </button>
+        </div>
 
         <div className="workspace-label">WORKSPACE</div>
         <nav className="sidebar-nav" aria-label="Main navigation">

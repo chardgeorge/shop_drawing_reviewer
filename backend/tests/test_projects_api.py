@@ -120,8 +120,11 @@ def test_project_validation_and_missing_resources(client: TestClient) -> None:
     assert client.post("/api/v1/projects", json={"name": "  "}).status_code == 422
     assert client.get("/api/v1/projects?cursor=invalid").status_code == 422
     assert client.patch(f"/api/v1/projects/{uuid4()}", json={}).status_code == 422
-    assert client.patch(
-        f"/api/v1/projects/{uuid4()}",
-        json={"name": None},
-    ).status_code == 422
+    assert (
+        client.patch(
+            f"/api/v1/projects/{uuid4()}",
+            json={"name": None},
+        ).status_code
+        == 422
+    )
     assert client.get(f"/api/v1/projects/{uuid4()}").status_code == 404

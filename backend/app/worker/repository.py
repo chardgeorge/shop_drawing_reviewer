@@ -119,6 +119,35 @@ class IngestionRepository:
                     ),
                 )
 
+            for row in result.schedule_rows:
+                self.connection.execute(
+                    """
+                    INSERT INTO schedule_rows (
+                        extraction_run_id, schedule_type, row_number,
+                        member_mark_raw, member_mark_normalized,
+                        section_raw, section_normalized, page_number,
+                        page_width, page_height, source_bbox, extractor,
+                        confidence, review_state
+                    )
+                    VALUES (%s, 'beam', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        extraction_run_id,
+                        row.row_number,
+                        row.member_mark_raw,
+                        row.member_mark_normalized,
+                        row.section_raw,
+                        row.section_normalized,
+                        row.page_number,
+                        row.page_width,
+                        row.page_height,
+                        Jsonb(row.source_bbox),
+                        row.extractor,
+                        row.confidence,
+                        row.review_state,
+                    ),
+                )
+
             self.connection.execute(
                 """
                 UPDATE extraction_runs

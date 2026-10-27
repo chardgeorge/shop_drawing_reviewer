@@ -75,9 +75,7 @@ class ProjectRepository:
         ).fetchone()
 
     def update(self, project_id: UUID, fields: dict[str, Any]) -> ProjectRow | None:
-        assignments = ", ".join(
-            f"{UPDATE_COLUMNS[field]} = %s" for field in fields
-        )
+        assignments = ", ".join(f"{UPDATE_COLUMNS[field]} = %s" for field in fields)
         values = [fields[field] for field in fields]
         values.append(project_id)
         return self.connection.execute(

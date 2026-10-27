@@ -72,14 +72,20 @@ def test_project_crud_and_cursor_pagination(
             assert client.delete(f"/api/v1/projects/{project_id}").status_code == 204
             assert client.get(f"/api/v1/projects/{project_id}").status_code == 404
 
-            assert client.post(
-                "/api/v1/projects",
-                json={"name": "   "},
-            ).status_code == 422
-            assert client.get(
-                "/api/v1/projects",
-                params={"cursor": "invalid"},
-            ).status_code == 422
+            assert (
+                client.post(
+                    "/api/v1/projects",
+                    json={"name": "   "},
+                ).status_code
+                == 422
+            )
+            assert (
+                client.get(
+                    "/api/v1/projects",
+                    params={"cursor": "invalid"},
+                ).status_code
+                == 422
+            )
         finally:
             for project_id in created_ids:
                 client.delete(f"/api/v1/projects/{project_id}")
@@ -140,9 +146,7 @@ def test_document_upload_persists_metadata_and_pdf(
                 )
                 assert worker.run_once() is True
 
-            processed = client.get(
-                f"/api/v1/documents/{upload.json()['id']}"
-            ).json()
+            processed = client.get(f"/api/v1/documents/{upload.json()['id']}").json()
             assert processed["status"] == "ready"
             assert processed["extraction"]["status"] == "completed"
             assert processed["extraction"]["page_count"] == 1

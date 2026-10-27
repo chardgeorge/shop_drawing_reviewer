@@ -43,6 +43,7 @@ class MemoryDocumentRepository:
         document = self.create(**fields)
         document["status"] = "queued"
         document["extraction"] = {
+            "id": uuid4(),
             "status": "queued",
             "page_count": None,
             "diagnostics": {},
@@ -64,13 +65,53 @@ class MemoryDocumentRepository:
 
     def get(self, document_id: UUID) -> dict[str, object] | None:
         return next(
+            (document for document in self.documents if document["id"] == document_id),
+            None,
+        )
+
+    def get_storage_key(self, document_id: UUID) -> str | None:
+        document = self.get(document_id)
+        return str(document["storage_key"]) if document is not None else None
+
+    def list_schedule_rows(
+        self,
+        document_id: UUID,
+        extraction_run_id: UUID,
+    ) -> list[dict[str, object]] | None:
+        document = self.get(document_id)
+        if document is None or document["extraction"]["id"] != extraction_run_id:
+            return None
+        return [
+            row
+            for row in getattr(self, "schedule_rows", [])
+            if row["extraction_run_id"] == extraction_run_id
+        ]
+
+    def update_schedule_row(
+        self,
+        row_id: UUID,
+        *,
+        review_state: str | None,
+        member_mark: str | None,
+        section: str | None,
+    ) -> dict[str, object] | None:
+        row = next(
             (
-                document
-                for document in self.documents
-                if document["id"] == document_id
+                item
+                for item in getattr(self, "schedule_rows", [])
+                if item["id"] == row_id
             ),
             None,
         )
+        if row is None:
+            return None
+        if review_state is not None:
+            row["review_state"] = review_state
+        if member_mark is not None:
+            row["member_mark"] = member_mark
+        if section is not None:
+            row["section"] = section
+        return row
 
 
 @pytest.fixture
@@ -110,9 +151,10 @@ def test_upload_stores_immutable_pdf_and_lists_metadata(
     first_document = first.json()
     second_document = second.json()
     assert first_document["id"] != second_document["id"]
-    assert client.get(
-        f"/api/v1/documents/{first_document['id']}"
-    ).json()["id"] == first_document["id"]
+    assert (
+        client.get(f"/api/v1/documents/{first_document['id']}").json()["id"]
+        == first_document["id"]
+    )
     assert first_document["file_name"] == "schedule.pdf"
     assert first_document["revision"] == "A"
     assert first_document["status"] == "queued"
@@ -183,3 +225,75 @@ def test_failed_registration_removes_saved_file(
 
     assert response.status_code == 500
     assert list(storage_root.rglob("*.pdf")) == []
+
+
+def test_serves_uploaded_pdf_inline(
+    document_setup: tuple[TestClient, MemoryDocumentRepository, Path],
+) -> None:
+    client, repository, _ = document_setup
+    project_id = next(iter(repository.projects))
+    uploaded = client.post(
+        f"/api/v1/projects/{project_id}/documents",
+        data={"role": "engineer"},
+        files={"file": ("drawing.pdf", PDF_BYTES, "application/pdf")},
+    )
+
+    response = client.get(f"/api/v1/documents/{uploaded.json()['id']}/file")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"].startswith("inline;")
+    assert response.content == PDF_BYTES
+
+
+def test_lists_and_reviews_extracted_beam_rows(
+    document_setup: tuple[TestClient, MemoryDocumentRepository, Path],
+) -> None:
+    client, repository, _ = document_setup
+    project_id = next(iter(repository.projects))
+    uploaded = client.post(
+        f"/api/v1/projects/{project_id}/documents",
+        data={"role": "engineer"},
+        files={"file": ("drawing.pdf", PDF_BYTES, "application/pdf")},
+    ).json()
+    document_id = UUID(uploaded["id"])
+    extraction_run_id = UUID(uploaded["extraction"]["id"])
+    row_id = uuid4()
+    row = {
+        "id": row_id,
+        "extraction_run_id": extraction_run_id,
+        "row_number": 1,
+        "member_mark_raw": "B1",
+        "member_mark_normalized": "B1",
+        "section_raw": "W12x26",
+        "section_normalized": "W12X26",
+        "member_mark": "B1",
+        "section": "W12x26",
+        "page_number": 1,
+        "page_width": 612,
+        "page_height": 792,
+        "source_bbox": {"x0": 70, "y0": 100, "x1": 280, "y1": 120},
+        "confidence": 0.9,
+        "review_state": "needs_review",
+        "correction": {},
+        "reviewed_by": None,
+        "reviewed_at": None,
+    }
+    repository.schedule_rows = [row]
+
+    listed = client.get(
+        f"/api/v1/documents/{document_id}/extraction-runs/{extraction_run_id}/beam-rows"
+    )
+    updated = client.patch(
+        f"/api/v1/beam-rows/{row_id}",
+        json={"member_mark": "B-1", "section": "W14x30", "review_state": "accepted"},
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()["items"][0]["source_bbox"]["x0"] == 70
+    assert updated.status_code == 200
+    assert updated.json()["member_mark"] == "B-1"
+    assert updated.json()["section"] == "W14x30"
+    assert updated.json()["member_mark_raw"] == "B1"
+    assert updated.json()["section_raw"] == "W12x26"
+    assert updated.json()["review_state"] == "accepted"

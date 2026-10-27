@@ -64,7 +64,7 @@ The prototype is intended for individual engineers running it locally, without l
 
 ## Development status
 
-The local frontend and backend foundations are in place. Project CRUD and PDF registration now persist to PostgreSQL, with uploaded PDFs stored outside the repository. A separate worker validates uploaded PDFs, records page metadata and selectable text, and reports explicit processing states; beam schedule parsing, comparisons, and issue review remain to be implemented. Hosted authentication and production data-retention/deployment decisions are out of scope for this prototype.
+The local frontend/backend workflow now creates a project, uploads engineer and shop PDFs, runs background extraction, and provides a beam-row review screen with source PDF access, correction, accept, and reject actions. The first parser is deliberately limited to selectable-text schedules with a same-line mark/member/beam/reference header and section/size/profile/designation header. Comparison rules and issue review remain to be implemented. Hosted authentication and production data-retention/deployment decisions are out of scope for this prototype.
 
 ## Run the frontend preview
 
@@ -76,7 +76,7 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Next.js (normally `http://localhost:3000`). The welcome screen supports selecting or dragging multiple PDFs into the engineer-issued and shop-drawing panels. This is a UI scaffold only: files remain in the browser and are not uploaded or processed.
+Open the local URL printed by Next.js (normally `http://localhost:3000`). Select or drag one or more PDFs into each drawing panel, then choose Continue to create a project and upload the files to the local API. Keep the API, PostgreSQL, and ingestion worker running in separate terminals. The review screen polls ingestion status, shows extracted beam rows beside the source PDF, and lets you correct, accept, or reject rows. Browser PDF support is used for viewing and page navigation.
 
 Run `npm run typecheck` to check the frontend TypeScript types.
 
@@ -112,6 +112,6 @@ cd backend
 python -m app.worker.runner
 ```
 
-The worker polls the PostgreSQL queue and retries transient failures up to three times. For a single-job run, use `python -m app.worker.runner --once`. The API health check is at `http://localhost:8000/health`; interactive API documentation is at `http://localhost:8000/docs`. Project create/list/detail/update/delete routes are available under `/api/v1/projects`; multipart PDF upload and document listing are available under `/api/v1/projects/{project_id}/documents`. Uploaded PDFs default to `%LOCALAPPDATA%\ShopDrawingReviewer\uploads` on Windows or `~/.local/share/shop-drawing-reviewer/uploads` elsewhere; set `SHOP_REVIEWER_STORAGE_DIR` to choose another local folder. Uploads are checked for a PDF header, then the worker validates and extracts page dimensions and selectable text. Scanned/no-text files are marked `needs_review` with an OCR-not-enabled warning; corrupt and encrypted PDFs receive explicit failure statuses. No prototype size/page limit is imposed. The database is bound to localhost and uses prototype-only credentials. Stop the API and worker with Ctrl+C and stop PostgreSQL with `docker compose down` from the repository root.
+The worker polls the PostgreSQL queue and retries transient failures up to three times. For a single-job run, use `python -m app.worker.runner --once`. The API health check is at `http://localhost:8000/health`; interactive API documentation is at `http://localhost:8000/docs`. Project CRUD routes are under `/api/v1/projects`; multipart PDF upload and document listing are under `/api/v1/projects/{project_id}/documents`. Uploaded PDFs default to `%LOCALAPPDATA%\ShopDrawingReviewer\uploads` on Windows or `~/.local/share/shop-drawing-reviewer/uploads` elsewhere; set `SHOP_REVIEWER_STORAGE_DIR` to choose another local folder. The worker extracts per-page text and dimensions and attempts the documented first beam schedule layout. Rows preserve original text, normalized values, page coordinates, confidence, and review state. Unrecognized layouts and scanned/no-text files receive actionable warnings and `needs_review`; corrupt and encrypted PDFs receive explicit failure statuses. No prototype size/page limit is imposed. The database is bound to localhost and uses prototype-only credentials. Stop the API and worker with Ctrl+C and stop PostgreSQL with `docker compose down` from the repository root.
 
 Run backend checks from `backend/` with `ruff check app tests` and `pytest`. PostgreSQL integration tests run when `TEST_DATABASE_URL` is set and migrations have been applied; the CI workflow provisions a test database automatically.

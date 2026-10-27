@@ -2,6 +2,7 @@ import logging
 import re
 from pathlib import PureWindowsPath
 from typing import Annotated
+from urllib.parse import quote
 from uuid import UUID, uuid4
 
 import psycopg
@@ -12,9 +13,11 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Response,
     UploadFile,
     status,
 )
+from fastapi.responses import StreamingResponse
 
 from app.database import get_document_repository
 from app.documents.models import (
@@ -22,6 +25,9 @@ from app.documents.models import (
     DocumentResponse,
     DocumentRole,
     DocumentType,
+    ScheduleRowListResponse,
+    ScheduleRowResponse,
+    ScheduleRowReviewUpdate,
 )
 from app.documents.repository import DocumentRepository
 from app.documents.storage import (
@@ -159,3 +165,124 @@ def get_document(
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found.")
     return DocumentResponse.model_validate(document)
+
+
+@router.get(
+    "/api/v1/documents/{document_id}/extraction-runs/{run_id}/beam-rows",
+    response_model=ScheduleRowListResponse,
+)
+def list_beam_rows(
+    document_id: UUID,
+    run_id: UUID,
+    repository: Annotated[
+        DocumentRepository,
+        Depends(get_document_repository),
+    ],
+) -> ScheduleRowListResponse:
+    rows = repository.list_schedule_rows(document_id, run_id)
+    if rows is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Extraction run not found for this document.",
+        )
+    return ScheduleRowListResponse(
+        items=[ScheduleRowResponse.model_validate(row) for row in rows]
+    )
+
+
+@router.patch(
+    "/api/v1/beam-rows/{row_id}",
+    response_model=ScheduleRowResponse,
+)
+def review_beam_row(
+    row_id: UUID,
+    update: ScheduleRowReviewUpdate,
+    repository: Annotated[
+        DocumentRepository,
+        Depends(get_document_repository),
+    ],
+) -> ScheduleRowResponse:
+    fields = update.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(
+            status_code=422,
+            detail="At least one correction or review state must be provided.",
+        )
+    if "review_state" in fields and fields["review_state"] is None:
+        raise HTTPException(
+            status_code=422,
+            detail="review_state cannot be null.",
+        )
+
+    for field in ("member_mark", "section"):
+        value = fields.get(field)
+        if field in fields and value is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{field} cannot be null.",
+            )
+        if value is not None:
+            normalized = value.strip()
+            if not normalized:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{field} cannot be blank.",
+                )
+            fields[field] = normalized
+
+    row = repository.update_schedule_row(
+        row_id,
+        review_state=(
+            fields["review_state"].value
+            if fields.get("review_state") is not None
+            else None
+        ),
+        member_mark=fields.get("member_mark"),
+        section=fields.get("section"),
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Schedule row not found.")
+    return ScheduleRowResponse.model_validate(row)
+
+
+@router.get("/api/v1/documents/{document_id}/file")
+def get_document_file(
+    document_id: UUID,
+    repository: Annotated[
+        DocumentRepository,
+        Depends(get_document_repository),
+    ],
+    storage: Annotated[FileStorage, Depends(get_document_storage)],
+) -> Response:
+    document = repository.get(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    storage_key = repository.get_storage_key(document_id)
+    if storage_key is None:
+        raise HTTPException(status_code=404, detail="Document file not found.")
+
+    try:
+        pdf_stream = storage.open(storage_key)
+    except FileNotFoundError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="The document file is missing from local storage.",
+        ) from error
+
+    def stream_file():
+        try:
+            while chunk := pdf_stream.read(1024 * 1024):
+                yield chunk
+        finally:
+            pdf_stream.close()
+
+    return StreamingResponse(
+        stream_file(),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f"inline; filename*=UTF-8''{quote(document['file_name'], safe='')}"
+            ),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

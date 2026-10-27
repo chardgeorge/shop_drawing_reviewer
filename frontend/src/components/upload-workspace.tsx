@@ -1,13 +1,266 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import type { ChangeEvent, DragEvent, ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type {
+  ChangeEvent,
+  Dispatch,
+  DragEvent,
+  ReactNode,
+  SetStateAction,
+} from "react";
 
 type DrawingSide = "engineering" | "shop";
 type DrawingFile = {
   id: string;
   file: File;
 };
+
+type ExtractedDocument = {
+  id: string;
+  role: "engineer" | "shop";
+  file_name: string;
+  status: "uploaded" | "queued" | "processing" | "ready" | "needs_review" | "failed";
+  extraction: {
+    id: string;
+    status: string;
+    page_count: number | null;
+    diagnostics: {
+      warnings?: { code: string; message: string }[];
+      schedule_row_count?: number;
+    };
+    error_code: string | null;
+    error_message: string | null;
+  } | null;
+};
+
+type BeamRow = {
+  id: string;
+  member_mark_raw: string | null;
+  section_raw: string | null;
+  member_mark: string | null;
+  section: string | null;
+  page_number: number;
+  source_bbox: { x0: number; y0: number; x1: number; y1: number } | null;
+  confidence: number | null;
+  review_state: "needs_review" | "accepted" | "rejected";
+};
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+
+async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as
+      | { detail?: string }
+      | null;
+    throw new Error(body?.detail ?? `Request failed (${response.status}).`);
+  }
+  return (await response.json()) as T;
+}
+
+function ReviewWorkspace({
+  projectId,
+  documents,
+  onDocumentsChange,
+  onBack,
+}: {
+  projectId: string;
+  documents: ExtractedDocument[];
+  onDocumentsChange: Dispatch<SetStateAction<ExtractedDocument[]>>;
+  onBack: () => void;
+}) {
+  const [selectedDocumentId, setSelectedDocumentId] = useState(documents[0]?.id ?? "");
+  const [rows, setRows] = useState<BeamRow[]>([]);
+  const [drafts, setDrafts] = useState<Record<string, { member_mark: string; section: string }>>({});
+  const [selectedPage, setSelectedPage] = useState(1);
+  const [error, setError] = useState("");
+  const [savingRowId, setSavingRowId] = useState("");
+
+  const selectedDocument = documents.find((document) => document.id === selectedDocumentId);
+  const extractionId = selectedDocument?.extraction?.id;
+
+  useEffect(() => {
+    let active = true;
+    const refresh = async () => {
+      try {
+        const latest = await Promise.all(
+          documents.map((document) =>
+            requestJson<ExtractedDocument>(`/api/v1/documents/${document.id}`),
+          ),
+        );
+        if (active) onDocumentsChange(latest);
+      } catch (requestError) {
+        if (active) setError((requestError as Error).message);
+      }
+    };
+    const pending = documents.some(
+      (document) => document.status === "queued" || document.status === "processing",
+    );
+    if (!pending) return;
+    const timer = window.setInterval(refresh, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [documents, onDocumentsChange]);
+
+  useEffect(() => {
+    let active = true;
+    setRows([]);
+    if (!selectedDocument || !extractionId || selectedDocument.extraction?.status !== "completed") {
+      return;
+    }
+
+    requestJson<{ items: BeamRow[] }>(
+      `/api/v1/documents/${selectedDocument.id}/extraction-runs/${extractionId}/beam-rows`,
+    )
+      .then((response) => {
+        if (active) {
+          setRows(response.items);
+          setSelectedPage(response.items[0]?.page_number ?? 1);
+        }
+      })
+      .catch((requestError: Error) => {
+        if (active) setError(requestError.message);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedDocument, extractionId]);
+
+  async function updateRow(
+    row: BeamRow,
+    update: { review_state?: BeamRow["review_state"]; member_mark?: string; section?: string },
+  ) {
+    setSavingRowId(row.id);
+    setError("");
+    try {
+      const updated = await requestJson<BeamRow>(`/api/v1/beam-rows/${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(update),
+      });
+      setRows((current) => current.map((item) => (item.id === row.id ? updated : item)));
+      const latestDocument = await requestJson<ExtractedDocument>(
+        `/api/v1/documents/${selectedDocumentId}`,
+      );
+      onDocumentsChange((current) =>
+        current.map((item) =>
+          item.id === latestDocument.id ? latestDocument : item,
+        ),
+      );
+      setDrafts((current) => {
+        const next = { ...current };
+        delete next[row.id];
+        return next;
+      });
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    } finally {
+      setSavingRowId("");
+    }
+  }
+
+  const viewerPage = selectedPage || rows[0]?.page_number || 1;
+  const viewerUrl = selectedDocument
+    ? `${API_BASE_URL}/api/v1/documents/${selectedDocument.id}/file#page=${viewerPage}`
+    : "";
+
+  return (
+    <section className="review-workspace" aria-labelledby="review-heading">
+      <div className="review-heading-row">
+        <div>
+          <div className="section-kicker"><span className="kicker-line" />EXTRACTION REVIEW</div>
+          <h1 id="review-heading">Review extracted beam schedules</h1>
+          <p className="intro-copy">Check each extracted value against its source PDF before using it.</p>
+        </div>
+        <button className="browse-button" type="button" onClick={onBack}>Back to documents</button>
+      </div>
+      <div className="review-document-tabs" aria-label="Uploaded documents">
+        {documents.map((document) => (
+          <button
+            className={`review-document-tab ${selectedDocumentId === document.id ? "is-selected" : ""}`}
+            key={document.id}
+            type="button"
+            onClick={() => setSelectedDocumentId(document.id)}
+          >
+            <span>{document.role === "engineer" ? "Engineer" : "Shop"} · {document.file_name}</span>
+            <small>{document.status.replace("_", " ")}</small>
+          </button>
+        ))}
+      </div>
+      {error && <p className="notice-message" role="alert">{error}</p>}
+      {selectedDocument?.status === "queued" || selectedDocument?.status === "processing" ? (
+        <div className="review-empty" role="status">PDF extraction is in progress. This view refreshes automatically.</div>
+      ) : selectedDocument?.status === "failed" ? (
+        <div className="notice-message" role="alert">
+          Extraction failed{selectedDocument.extraction?.error_code ? ` (${selectedDocument.extraction.error_code})` : ""}: {selectedDocument.extraction?.error_message ?? "See backend logs for details."}
+        </div>
+      ) : selectedDocument ? (
+        <>
+          {selectedDocument.extraction?.diagnostics.warnings?.map((warning, index) => (
+            <div className="notice-message" key={`${warning.code}-${index}`}>{warning.message}</div>
+          ))}
+          <div className="review-layout">
+            <div className="pdf-panel">
+              <div className="review-panel-heading">
+                <strong>Source PDF</strong>
+                <span>Page {viewerPage}{selectedDocument.extraction?.page_count ? ` of ${selectedDocument.extraction.page_count}` : ""}</span>
+              </div>
+              <iframe title={`Source PDF: ${selectedDocument.file_name}`} src={viewerUrl} />
+            </div>
+            <div className="schedule-panel">
+              <div className="review-panel-heading">
+                <strong>Beam schedule rows</strong>
+                <span>{rows.length} extracted</span>
+              </div>
+              {rows.length === 0 ? (
+                <div className="review-empty">No supported beam schedule rows were found. Check the warning above and the source PDF.</div>
+              ) : (
+                <div className="schedule-row-list">
+                  {rows.map((row) => {
+                    const draft = drafts[row.id] ?? {
+                      member_mark: row.member_mark ?? "",
+                      section: row.section ?? "",
+                    };
+                    return (
+                      <article className="schedule-row-card" key={row.id} onFocus={() => setSelectedPage(row.page_number)}>
+                        <div className="schedule-row-title">
+                          <span>Page {row.page_number} · {row.review_state.replace("_", " ")}</span>
+                          <span>{row.confidence === null ? "—" : `${Math.round(row.confidence * 100)}% confidence`}</span>
+                        </div>
+                        <label>Member mark
+                          <input value={draft.member_mark} onChange={(event) => setDrafts((current) => ({ ...current, [row.id]: { ...draft, member_mark: event.target.value } }))} />
+                        </label>
+                        <label>Section / size
+                          <input value={draft.section} onChange={(event) => setDrafts((current) => ({ ...current, [row.id]: { ...draft, section: event.target.value } }))} />
+                        </label>
+                        <div className="schedule-row-actions">
+                          <button type="button" disabled={savingRowId === row.id} onClick={() => updateRow(row, { member_mark: draft.member_mark, section: draft.section })}>Save correction</button>
+                          <button type="button" disabled={savingRowId === row.id} onClick={() => updateRow(row, { review_state: "accepted" })}>Accept</button>
+                          <button type="button" disabled={savingRowId === row.id} onClick={() => updateRow(row, { review_state: "rejected" })}>Reject</button>
+                        </div>
+                        {(row.member_mark_raw || row.section_raw) && (
+                          <small className="provenance-note">
+                            Extracted: {row.member_mark_raw ?? "—"} · {row.section_raw ?? "—"}
+                            {row.source_bbox && ` · source box ${Math.round(row.source_bbox.x0)}, ${Math.round(row.source_bbox.y0)}`}
+                          </small>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="review-empty">No document selected for project {projectId}.</div>
+      )}
+    </section>
+  );
+}
 
 const SIDE_COPY: Record<
   DrawingSide,
@@ -144,6 +397,10 @@ export default function UploadWorkspace() {
   });
   const [dragging, setDragging] = useState<DrawingSide | null>(null);
   const [notice, setNotice] = useState("");
+  const [projectName, setProjectName] = useState("");
+  const [isUploading, setIsUploading] = useState(false);
+  const [reviewProjectId, setReviewProjectId] = useState("");
+  const [uploadedDocuments, setUploadedDocuments] = useState<ExtractedDocument[]>([]);
   const engineeringInput = useRef<HTMLInputElement>(null);
   const shopInput = useRef<HTMLInputElement>(null);
 
@@ -157,6 +414,49 @@ export default function UploadWorkspace() {
       ),
     [files],
   );
+
+  async function beginReview() {
+    setIsUploading(true);
+    setNotice("");
+    try {
+      const project = await requestJson<{ id: string }>("/api/v1/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: projectName.trim() || `Local drawing review ${new Date().toLocaleDateString()}`,
+        }),
+      });
+
+      const uploaded: ExtractedDocument[] = [];
+      for (const [side, role] of [
+        ["engineering", "engineer"],
+        ["shop", "shop"],
+      ] as const) {
+        for (const item of files[side]) {
+          const form = new FormData();
+          form.append("role", role);
+          form.append("file", item.file);
+          form.append(
+            "document_type",
+            role === "engineer" ? "general_arrangement" : "shop_drawing",
+          );
+          uploaded.push(
+            await requestJson<ExtractedDocument>(
+              `/api/v1/projects/${project.id}/documents`,
+              { method: "POST", body: form },
+            ),
+          );
+        }
+      }
+
+      setReviewProjectId(project.id);
+      setUploadedDocuments(uploaded);
+    } catch (requestError) {
+      setNotice((requestError as Error).message);
+    } finally {
+      setIsUploading(false);
+    }
+  }
 
   function addFiles(side: DrawingSide, selected: FileList | File[]) {
     const accepted: DrawingFile[] = [];
@@ -318,6 +618,39 @@ export default function UploadWorkspace() {
     );
   }
 
+  if (reviewProjectId) {
+    return (
+      <div className="app-shell">
+        <aside className="sidebar">
+          <a className="brand" href="#" aria-label="Shop Drawing Reviewer home">
+            <span className="brand-mark"><Icon name="logo" size={22} /></span>
+            <span className="brand-copy"><strong>shopcheck</strong><span>STRUCTURAL REVIEW</span></span>
+          </a>
+          <div className="workspace-label">WORKSPACE</div>
+          <nav className="sidebar-nav" aria-label="Main navigation">
+            <a className="nav-item active" href="#review"><Icon name="grid" /><span>New review</span></a>
+          </nav>
+          <div className="sidebar-bottom">
+            <div className="sidebar-help"><span className="help-mark"><Icon name="shield" size={18} /></span><div><strong>Built for engineering review</strong><p>Your judgment stays in control.</p></div></div>
+            <button className="profile-button" type="button" aria-label="Account settings"><span className="avatar">GE</span><span className="profile-copy"><strong>Guest engineer</strong><span>Local preview</span></span><Icon name="settings" size={18} /></button>
+          </div>
+        </aside>
+        <main className="main-content" id="review">
+          <header className="topbar"><div className="breadcrumb"><span>Workspace</span><span className="breadcrumb-divider">/</span><strong>Extraction review</strong></div><div className="topbar-status"><span className="status-dot" />Local review</div></header>
+          <div className="content-wrap">
+            <ReviewWorkspace
+              projectId={reviewProjectId}
+              documents={uploadedDocuments}
+              onDocumentsChange={setUploadedDocuments}
+              onBack={() => setReviewProjectId("")}
+            />
+            <div className="prototype-note"><span className="prototype-indicator" /><span>PDFs are stored on this machine and are not sent to external AI services.</span></div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -424,6 +757,8 @@ export default function UploadWorkspace() {
                 type="text"
                 placeholder="e.g. North Plant — Structural Steel"
                 maxLength={120}
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
               />
               <span className="project-input-hint">A name helps you find this review later</span>
             </div>
@@ -451,20 +786,16 @@ export default function UploadWorkspace() {
               <span>
                 {totalFiles > 0
                   ? `${totalFiles} PDF${totalFiles === 1 ? "" : "s"} selected · ${formatBytes(totalSize)} total`
-                  : "Files stay in this browser in preview mode."}
+                  : "PDFs upload only to the local backend."}
               </span>
             </div>
             <button
               className="continue-button"
               type="button"
-              disabled={!isReady}
-              onClick={() =>
-                setNotice(
-                  "Both drawing sets are selected. Server upload and comparison will be available when the backend is connected.",
-                )
-              }
+              disabled={!isReady || isUploading}
+              onClick={beginReview}
             >
-              Continue
+              {isUploading ? "Uploading…" : "Continue"}
               <Icon name="arrow" size={18} />
             </button>
           </div>
@@ -472,7 +803,7 @@ export default function UploadWorkspace() {
           <div className="prototype-note">
             <span className="prototype-indicator" />
             <span>
-              Preview mode — selected PDFs stay in your browser and are not uploaded.
+              Local prototype — PDFs upload to the local backend and stay outside Git.
             </span>
           </div>
         </div>

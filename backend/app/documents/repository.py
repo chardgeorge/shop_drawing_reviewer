@@ -2,6 +2,7 @@ from typing import Any
 from uuid import UUID
 
 from psycopg import Connection
+from psycopg.types.json import Jsonb
 
 from app.worker.extraction import PDF_EXTRACTOR_VERSION
 
@@ -65,6 +66,7 @@ class DocumentRepository:
                    d.status, d.uploaded_by, d.uploaded_at,
                    CASE WHEN er.status IS NULL THEN NULL ELSE
                        jsonb_build_object(
+                           'id', er.id,
                            'status', er.status,
                            'page_count', er.page_count,
                            'diagnostics', er.diagnostics,
@@ -74,7 +76,7 @@ class DocumentRepository:
                    END AS extraction
             FROM documents d
             LEFT JOIN LATERAL (
-                SELECT status, page_count, diagnostics, error_code, error_message
+                SELECT id, status, page_count, diagnostics, error_code, error_message
                 FROM extraction_runs
                 WHERE document_id = d.id
                 ORDER BY run_number DESC
@@ -95,6 +97,7 @@ class DocumentRepository:
                    d.status, d.uploaded_by, d.uploaded_at,
                    CASE WHEN er.status IS NULL THEN NULL ELSE
                        jsonb_build_object(
+                           'id', er.id,
                            'status', er.status,
                            'page_count', er.page_count,
                            'diagnostics', er.diagnostics,
@@ -104,7 +107,7 @@ class DocumentRepository:
                    END AS extraction
             FROM documents d
             LEFT JOIN LATERAL (
-                SELECT status, page_count, diagnostics, error_code, error_message
+                SELECT id, status, page_count, diagnostics, error_code, error_message
                 FROM extraction_runs
                 WHERE document_id = d.id
                 ORDER BY run_number DESC
@@ -114,6 +117,115 @@ class DocumentRepository:
             """,
             (document_id,),
         ).fetchone()
+
+    def get_storage_key(self, document_id: UUID) -> str | None:
+        row = self.connection.execute(
+            "SELECT storage_key FROM documents WHERE id = %s",
+            (document_id,),
+        ).fetchone()
+        return row["storage_key"] if row is not None else None
+
+    def list_schedule_rows(
+        self,
+        document_id: UUID,
+        extraction_run_id: UUID,
+    ) -> list[DocumentRow] | None:
+        run = self.connection.execute(
+            """
+            SELECT 1
+            FROM extraction_runs
+            WHERE id = %s AND document_id = %s
+            """,
+            (extraction_run_id, document_id),
+        ).fetchone()
+        if run is None:
+            return None
+
+        return self.connection.execute(
+            """
+            SELECT id, extraction_run_id, row_number, member_mark_raw,
+                   member_mark_normalized, section_raw, section_normalized,
+                   page_number, page_width, page_height, source_bbox, confidence,
+                   review_state, correction, reviewed_by, reviewed_at,
+                   COALESCE(correction->>'member_mark', member_mark_raw)
+                       AS member_mark,
+                   COALESCE(correction->>'section', section_raw) AS section
+            FROM schedule_rows
+            WHERE extraction_run_id = %s
+            ORDER BY page_number, row_number, id
+            """,
+            (extraction_run_id,),
+        ).fetchall()
+
+    def update_schedule_row(
+        self,
+        row_id: UUID,
+        *,
+        review_state: str | None,
+        member_mark: str | None,
+        section: str | None,
+    ) -> DocumentRow | None:
+        with self.connection.transaction():
+            current = self.connection.execute(
+                "SELECT review_state, correction FROM schedule_rows WHERE id = %s",
+                (row_id,),
+            ).fetchone()
+            if current is None:
+                return None
+
+            correction = dict(current["correction"])
+            if member_mark is not None:
+                correction["member_mark"] = member_mark.strip()
+            if section is not None:
+                correction["section"] = section.strip()
+            row = self.connection.execute(
+                """
+                UPDATE schedule_rows
+                SET review_state = %s,
+                    correction = %s,
+                    reviewed_by = 'local-user',
+                    reviewed_at = now()
+                WHERE id = %s
+                RETURNING id, extraction_run_id, row_number, member_mark_raw,
+                          member_mark_normalized, section_raw, section_normalized,
+                          page_number, page_width, page_height, source_bbox,
+                          confidence, review_state, correction, reviewed_by,
+                          reviewed_at,
+                          COALESCE(correction->>'member_mark', member_mark_raw)
+                              AS member_mark,
+                          COALESCE(correction->>'section', section_raw) AS section
+                """,
+                (
+                    review_state or current["review_state"],
+                    Jsonb(correction),
+                    row_id,
+                ),
+            ).fetchone()
+            self.connection.execute(
+                """
+                UPDATE documents AS document
+                SET status = 'ready'
+                FROM extraction_runs AS run
+                WHERE run.id = (
+                    SELECT extraction_run_id
+                    FROM schedule_rows
+                    WHERE id = %s
+                )
+                  AND document.id = run.document_id
+                  AND run.status = 'completed'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM schedule_rows AS remaining
+                      WHERE remaining.extraction_run_id = run.id
+                        AND remaining.review_state = 'needs_review'
+                  )
+                  AND jsonb_array_length(
+                      COALESCE(run.diagnostics->'warnings', '[]'::jsonb)
+                  ) = 0
+                """,
+                (row_id,),
+            )
+            return row
 
     def create_with_ingestion(
         self,

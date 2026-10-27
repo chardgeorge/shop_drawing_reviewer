@@ -12,7 +12,7 @@ An engineering-led application for comparing fabricator steel shop drawings with
 - Present issues with their source references and allow engineers to review the results.
 - Keep AI optional and limited to drafting explanations from verified findings.
 
-Out of scope for the first release: general-purpose drawing vision, connection geometry checks, automatic drawing approval, production-grade PDF markup, and cloud collaboration. The local frontend includes an experimental, rasterized first-page markup preview.
+Out of scope for the first release: production-grade drawing vision, connection geometry checks, automatic drawing approval, production-quality PDF markup, and cloud collaboration. The local frontend includes an experimental, browser-only visual comparison for selected PDF pages.
 
 ## Repository layout
 
@@ -51,7 +51,7 @@ See [Solution architecture](docs/SOLUTION_ARCHITECTURE.md), [Data model](docs/DA
 - PostgreSQL 16+
 - Docker Desktop (optional, for local PostgreSQL)
 
-The frontend currently provides a runnable local UI preview with an experimental, browser-only comparison of the first page in each PDF. It highlights pixel-difference candidates and can export a marked-up copy of the shop drawing. Backend services, authentication, and production data-retention policy remain to be implemented and agreed.
+The frontend includes the existing project upload and schedule-extraction review workflow, plus an optional browser-only visual comparison of selected PDF pages. Backend services, authentication, deployment configuration, and production data-retention policy remain to be implemented and agreed.
 
 ## Engineering and data handling principles
 
@@ -64,7 +64,7 @@ The frontend currently provides a runnable local UI preview with an experimental
 
 ## Development status
 
-Architecture and implementation plan are documented. The frontend includes an experimental browser-only first-page registration and pixel-difference prototype. Backend services, authentication, deployment configuration, and production data-retention policy remain to be implemented and agreed.
+Architecture and implementation plan are documented. The frontend includes an experimental browser-only page-registration and pixel-difference prototype alongside the project upload and extraction-review workflow. Backend services, authentication, deployment configuration, and production data-retention policy remain to be implemented and agreed.
 
 ## Run the frontend preview
 
@@ -76,9 +76,9 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Next.js (normally `http://localhost:3000`). Select the engineer-issued and shop PDFs, then choose **Compare first pages**. The first PDF in each panel is rendered in the browser, aligned using shared visual features, and compared. In the result, choose **Mark beam lines** and drag over framing lines on the aligned shop drawing to add numbered beam-candidate marks; these annotations can be removed or cleared and are included in the downloaded PDF. They record reviewer interpretation only and do not identify member sizes or confirm framing. Files stay in the browser and are not uploaded.
+Open the local URL printed by Next.js (normally `http://localhost:3000`). Add engineer-issued and shop PDFs, choose a file and page from each set in **Compare drawing pages**, then run the optional visual check. The selected pages are rendered in the browser and aligned using shared visual features. A rasterized, aligned view of the selected shop page with candidate differences can be downloaded. Visual comparison uses the browser-selected files and does not change the existing project upload and extraction workflow.
 
-This is experimental visual registration and pixel comparison, not engineering review automation. It can compensate for page size, scale, rotation, and translation differences when the pages contain enough shared visual features. Low-confidence matches are rejected. It does not analyze later pages, correct perspective distortion, or reliably handle unrelated drawings, substantial redesigns, or different crops that share too little content. It may flag text/revision differences or miss real discrepancies, so review the alignment, originals, and every highlighted candidate. The exported PDF contains only the aligned first page and is rasterized. The `sample-drawings` folder contains a synthetic pair with an intentionally shifted beam for trying the workflow.
+This is experimental visual registration and pixel comparison, not engineering review automation. It supports page-size, scale, rotation, translation, and moderate affine skew differences when the pages retain enough shared geometry. Low-confidence matches are rejected. It cannot reliably compare unrelated drawings, substantial redesigns, severe crops, or perspective-distorted scans, and it does not automatically identify corresponding pages across PDFs; select the pages to compare. Text, revisions, and title-block changes may be highlighted, and real differences may be missed. Review the alignment, originals, and every candidate. The exported PDF contains only the selected aligned shop page and is rasterized. Use sample PDFs that you have permission to test, stored locally; do not commit project drawings to this repository.
 
 Run `npm run typecheck` to check the frontend TypeScript types.
 

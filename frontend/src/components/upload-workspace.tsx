@@ -668,7 +668,7 @@ export default function UploadWorkspace() {
             <button className="sidebar-toggle" type="button" aria-label="Collapse menu" aria-expanded={isSidebarOpen} aria-controls="review-navigation" onClick={() => setIsSidebarOpen(false)}>
               <Icon name="grid" size={20} />
             </button>
-            <span className="brand-copy"><strong>shopChecker</strong><span>STRUCTURAL REVIEW</span></span>
+            <span className="brand-copy"><strong>QuickShop</strong><span>STRUCTURAL REVIEW</span></span>
           </div>
           <div className="workspace-label">WORKSPACE</div>
           <nav className="sidebar-nav" aria-label="Main navigation">
@@ -708,7 +708,7 @@ export default function UploadWorkspace() {
             <Icon name="grid" size={20} />
           </button>
           <span className="brand-copy">
-            <strong>shopChecker</strong>
+            <strong>QuickShop</strong>
             <span>STRUCTURAL REVIEW</span>
           </span>
         </div>

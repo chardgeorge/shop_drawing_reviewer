@@ -1,4 +1,5 @@
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+import cvModule from "@techstark/opencv-js";
 import type { CV } from "@techstark/opencv-js";
 
 export type DifferenceRegion = {
@@ -115,14 +116,17 @@ async function renderPage(file: File, pageNumber: number): Promise<RenderedPage>
 }
 
 async function loadOpenCv() {
-  const module = (await import("@techstark/opencv-js")) as {
+  const module = cvModule as unknown as {
     default?: unknown;
     "module.exports"?: unknown;
   };
-  const candidates = [module.default, module["module.exports"], module];
+  const candidates = [module.default, module["module.exports"], module, cvModule];
 
   for (const candidate of candidates) {
-    const runtime: unknown = await Promise.resolve(candidate);
+    let runtime: unknown = candidate;
+    if (runtime instanceof Promise) {
+      runtime = await runtime;
+    }
     if (
       typeof runtime === "object" &&
       runtime !== null &&

@@ -1,18 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent, DragEvent, ReactNode } from "react";
-import { comparePdfFirstPages } from "@/lib/pdf-compare";
-import type { PdfComparison } from "@/lib/pdf-compare";
+import type {
+  ChangeEvent,
+  DragEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+} from "react";
+import {
+  addBeamLineMarkupsToPdf,
+  comparePdfFirstPages,
+} from "@/lib/pdf-compare";
+import type { BeamLine, PdfComparison } from "@/lib/pdf-compare";
 
 type DrawingSide = "engineering" | "shop";
 type DrawingFile = {
   id: string;
   file: File;
-};
-
-type ComparisonDisplay = Omit<PdfComparison, "markedPdf"> & {
-  markedPdfUrl: string;
 };
 
 const SIDE_COPY: Record<
@@ -150,8 +154,13 @@ export default function UploadWorkspace() {
   });
   const [dragging, setDragging] = useState<DrawingSide | null>(null);
   const [notice, setNotice] = useState("");
-  const [comparison, setComparison] = useState<ComparisonDisplay | null>(null);
+  const [comparison, setComparison] = useState<PdfComparison | null>(null);
+  const [markedPdfUrl, setMarkedPdfUrl] = useState<string | null>(null);
+  const [beamLines, setBeamLines] = useState<BeamLine[]>([]);
+  const [draftBeamLine, setDraftBeamLine] = useState<BeamLine | null>(null);
+  const [isMarkingBeams, setIsMarkingBeams] = useState(false);
   const [isComparing, setIsComparing] = useState(false);
+  const draftBeamLineRef = useRef<BeamLine | null>(null);
   const engineeringInput = useRef<HTMLInputElement>(null);
   const shopInput = useRef<HTMLInputElement>(null);
 
@@ -168,8 +177,78 @@ export default function UploadWorkspace() {
 
   useEffect(() => {
     if (!comparison) return;
-    return () => URL.revokeObjectURL(comparison.markedPdfUrl);
-  }, [comparison]);
+    const activeComparison = comparison;
+    let active = true;
+    let objectUrl: string | null = null;
+    setMarkedPdfUrl(null);
+
+    async function prepareMarkedPdf() {
+      const pdfBytes = await addBeamLineMarkupsToPdf(
+        activeComparison.markedPdf,
+        beamLines,
+        activeComparison.width,
+        activeComparison.height,
+      );
+      const buffer = new ArrayBuffer(pdfBytes.byteLength);
+      new Uint8Array(buffer).set(pdfBytes);
+      objectUrl = URL.createObjectURL(
+        new Blob([buffer], { type: "application/pdf" }),
+      );
+      if (active) {
+        setMarkedPdfUrl(objectUrl);
+      } else {
+        URL.revokeObjectURL(objectUrl);
+      }
+    }
+
+    void prepareMarkedPdf().catch((error: unknown) => {
+      if (active) {
+        setNotice(
+          error instanceof Error
+            ? `Could not prepare the marked-up PDF: ${error.message}`
+            : "Could not prepare the marked-up PDF.",
+        );
+      }
+    });
+
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [comparison, beamLines]);
+
+  function resetComparison() {
+    setComparison(null);
+    setMarkedPdfUrl(null);
+    setBeamLines([]);
+    setDraftBeamLine(null);
+    draftBeamLineRef.current = null;
+    setIsMarkingBeams(false);
+  }
+
+  function getBeamPoint(
+    event: ReactPointerEvent<SVGSVGElement>,
+    width: number,
+    height: number,
+  ) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.max(
+        0,
+        Math.min(
+          width,
+          bounds.width === 0 ? 0 : ((event.clientX - bounds.left) / bounds.width) * width,
+        ),
+      ),
+      y: Math.max(
+        0,
+        Math.min(
+          height,
+          bounds.height === 0 ? 0 : ((event.clientY - bounds.top) / bounds.height) * height,
+        ),
+      ),
+    };
+  }
 
   function addFiles(side: DrawingSide, selected: FileList | File[]) {
     const accepted: DrawingFile[] = [];
@@ -196,7 +275,7 @@ export default function UploadWorkspace() {
     }
 
     if (accepted.length > 0) {
-      setComparison(null);
+      resetComparison();
       setFiles((current) => ({
         ...current,
         [side]: [
@@ -221,7 +300,7 @@ export default function UploadWorkspace() {
   }
 
   function removeFile(side: DrawingSide, id: string) {
-    setComparison(null);
+    resetComparison();
     setFiles((current) => ({
       ...current,
       [side]: current[side].filter((item) => item.id !== id),
@@ -235,18 +314,10 @@ export default function UploadWorkspace() {
 
     setIsComparing(true);
     setNotice("");
-    setComparison(null);
+    resetComparison();
     try {
       const result = await comparePdfFirstPages(engineerFile, shopFile);
-      const pdfBuffer = new ArrayBuffer(result.markedPdf.byteLength);
-      new Uint8Array(pdfBuffer).set(result.markedPdf);
-      const markedPdfUrl = URL.createObjectURL(
-        new Blob([pdfBuffer], { type: "application/pdf" }),
-      );
-      setComparison({
-        ...result,
-        markedPdfUrl,
-      });
+      setComparison(result);
     } catch (error) {
       setNotice(
         error instanceof Error
@@ -528,16 +599,79 @@ export default function UploadWorkspace() {
                     Review each one; they are not engineering conclusions.
                   </p>
                 </div>
-                <a
-                  className="marked-pdf-link"
-                  href={comparison.markedPdfUrl}
-                  download={`${files.shop[0]?.file.name.replace(/\.pdf$/i, "") ?? "shop-drawing"}-marked-up.pdf`}
-                >
-                  Download aligned markup · page 1
-                  <Icon name="arrow" size={16} />
-                </a>
+                {markedPdfUrl ? (
+                  <a
+                    className="marked-pdf-link"
+                    href={markedPdfUrl}
+                    download={`${files.shop[0]?.file.name.replace(/\.pdf$/i, "") ?? "shop-drawing"}-marked-up.pdf`}
+                  >
+                    Download marked-up PDF · page 1
+                    <Icon name="arrow" size={16} />
+                  </a>
+                ) : (
+                  <span className="marked-pdf-pending">Preparing marked-up PDF...</span>
+                )}
               </div>
 
+              <div className="beam-marking-toolbar">
+                <div>
+                  <strong>Manual framing marks</strong>
+                  <p>
+                    Drag along a line on the aligned shop drawing to label it as a
+                    beam candidate. This records your interpretation; it does not
+                    identify member sizes or confirm framing.
+                  </p>
+                </div>
+                <div className="beam-marking-actions">
+                  <button
+                    className={`beam-marking-button ${isMarkingBeams ? "is-active" : ""}`}
+                    type="button"
+                    aria-pressed={isMarkingBeams}
+                    onClick={() => {
+                      setIsMarkingBeams((active) => !active);
+                      setDraftBeamLine(null);
+                      draftBeamLineRef.current = null;
+                    }}
+                  >
+                    {isMarkingBeams ? "Finish marking" : "Mark beam lines"}
+                  </button>
+                  {beamLines.length > 0 && (
+                    <button
+                      className="beam-clear-button"
+                      type="button"
+                      onClick={() => setBeamLines([])}
+                    >
+                      Clear marks
+                    </button>
+                  )}
+                </div>
+              </div>
+              {isMarkingBeams && (
+                <p className="beam-marking-hint" role="status">
+                  Drag from one end of a framing line to the other. Marks appear in
+                  the downloaded PDF.
+                </p>
+              )}
+              {beamLines.length > 0 && (
+                <ul className="beam-line-list" aria-label="Manually marked beam lines">
+                  {beamLines.map((_, index) => (
+                    <li key={index}>
+                      <span>B{index + 1} · Beam candidate</span>
+                      <button
+                        type="button"
+                        aria-label={`Remove beam mark B${index + 1}`}
+                        onClick={() =>
+                          setBeamLines((current) =>
+                            current.filter((__, lineIndex) => lineIndex !== index),
+                          )
+                        }
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
               <p className="registration-summary">
                 Auto-aligned with {comparison.registration.inliers} matching
                 features ({Math.round(comparison.registration.inlierPercent * 100)}%
@@ -576,10 +710,50 @@ export default function UploadWorkspace() {
                       alt="Rendered first page of the shop drawing"
                     />
                     <svg
-                      className="difference-overlay"
+                      className={`difference-overlay ${isMarkingBeams ? "beam-marking-active" : ""}`}
                       viewBox={`0 0 ${comparison.width} ${comparison.height}`}
                       preserveAspectRatio="none"
-                      aria-hidden="true"
+                      aria-label="Aligned shop drawing annotations"
+                      onPointerDown={(event) => {
+                        if (!isMarkingBeams) return;
+                        event.preventDefault();
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                        const point = getBeamPoint(event, comparison.width, comparison.height);
+                        const line = {
+                          x1: point.x,
+                          y1: point.y,
+                          x2: point.x,
+                          y2: point.y,
+                        };
+                        draftBeamLineRef.current = line;
+                        setDraftBeamLine(line);
+                      }}
+                      onPointerMove={(event) => {
+                        if (!isMarkingBeams || !draftBeamLineRef.current) return;
+                        const point = getBeamPoint(event, comparison.width, comparison.height);
+                        const line = {
+                          ...draftBeamLineRef.current,
+                          x2: point.x,
+                          y2: point.y,
+                        };
+                        draftBeamLineRef.current = line;
+                        setDraftBeamLine(line);
+                      }}
+                      onPointerUp={(event) => {
+                        const startingLine = draftBeamLineRef.current;
+                        if (!isMarkingBeams || !startingLine) return;
+                        const point = getBeamPoint(event, comparison.width, comparison.height);
+                        const line = { ...startingLine, x2: point.x, y2: point.y };
+                        if (Math.hypot(line.x2 - line.x1, line.y2 - line.y1) >= 8) {
+                          setBeamLines((current) => [...current, line]);
+                        }
+                        draftBeamLineRef.current = null;
+                        setDraftBeamLine(null);
+                      }}
+                      onPointerCancel={() => {
+                        draftBeamLineRef.current = null;
+                        setDraftBeamLine(null);
+                      }}
                     >
                       {comparison.regions.map((region) => (
                         <g key={region.id}>
@@ -603,6 +777,52 @@ export default function UploadWorkspace() {
                           </text>
                         </g>
                       ))}
+                      {beamLines.map((line, index) => (
+                        <g key={`beam-${index}`}>
+                          <line
+                            x1={line.x1}
+                            y1={line.y1}
+                            x2={line.x2}
+                            y2={line.y2}
+                            stroke="white"
+                            strokeWidth={8}
+                            strokeLinecap="round"
+                          />
+                          <line
+                            x1={line.x1}
+                            y1={line.y1}
+                            x2={line.x2}
+                            y2={line.y2}
+                            stroke="#14529a"
+                            strokeWidth={4}
+                            strokeLinecap="round"
+                          />
+                          <text
+                            x={(line.x1 + line.x2) / 2 + 5}
+                            y={(line.y1 + line.y2) / 2 - 5}
+                            fill="#14529a"
+                            fontSize={14}
+                            fontWeight="bold"
+                            paintOrder="stroke"
+                            stroke="white"
+                            strokeWidth={3}
+                          >
+                            B{index + 1}
+                          </text>
+                        </g>
+                      ))}
+                      {draftBeamLine && (
+                        <line
+                          x1={draftBeamLine.x1}
+                          y1={draftBeamLine.y1}
+                          x2={draftBeamLine.x2}
+                          y2={draftBeamLine.y2}
+                          stroke="#14529a"
+                          strokeWidth={4}
+                          strokeDasharray="7 5"
+                          strokeLinecap="round"
+                        />
+                      )}
                     </svg>
                   </div>
                 </figure>

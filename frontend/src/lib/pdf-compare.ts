@@ -10,6 +10,13 @@ export type DifferenceRegion = {
   changedPixels: number;
 };
 
+export type BeamLine = {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+};
+
 export type RegistrationSummary = {
   inliers: number;
   matchedFeatures: number;
@@ -624,6 +631,47 @@ async function createMarkedPdf(
       color: red,
     });
   }
+
+  return pdf.save();
+}
+
+export async function addBeamLineMarkupsToPdf(
+  markedPdf: Uint8Array,
+  beamLines: BeamLine[],
+  renderedWidth: number,
+  renderedHeight: number,
+): Promise<Uint8Array> {
+  if (beamLines.length === 0) return markedPdf;
+
+  const pdf = await PDFDocument.load(markedPdf);
+  const page = pdf.getPages()[0];
+  if (!page) throw new Error("The marked-up PDF has no page to annotate.");
+
+  const { width: pageWidth, height: pageHeight } = page.getSize();
+  const font = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const blue = rgb(0.05, 0.32, 0.62);
+
+  beamLines.forEach((line, index) => {
+    const start = {
+      x: (line.x1 / renderedWidth) * pageWidth,
+      y: pageHeight - (line.y1 / renderedHeight) * pageHeight,
+    };
+    const end = {
+      x: (line.x2 / renderedWidth) * pageWidth,
+      y: pageHeight - (line.y2 / renderedHeight) * pageHeight,
+    };
+    const labelX = Math.min(pageWidth - 22, Math.max(0, (start.x + end.x) / 2 + 4));
+    const labelY = Math.min(pageHeight - 10, Math.max(0, (start.y + end.y) / 2 + 4));
+
+    page.drawLine({ start, end, thickness: 2, color: blue });
+    page.drawText(`B${index + 1}`, {
+      x: labelX,
+      y: labelY,
+      size: 8,
+      font,
+      color: blue,
+    });
+  });
 
   return pdf.save();
 }
